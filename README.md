@@ -56,10 +56,16 @@ and uses forward slashes.
 | `statusAssetDir`   | Where the per-language status images are written         |
 | `contributorsFile` | Where translator credits are stored, outside `localeDir` |
 | `translationGuide` | The guide the status table links translators to          |
+| `maintainers`      | Optional GitHub logins treated like repository admins    |
 
 History replay starts at `historyBaseline`, and every unmarked translation in that commit counts
 as Accepted. The locale files there have to be valid, so fix any check errors first, commit, and
 use that commit. On a project adopting lexmit, that is the latest commit on the main branch.
+
+`maintainers` lists GitHub logins treated as maintainers in addition to repository admins, for
+example a maintainer's second account. Maintainers are credited only for languages they created.
+GitHub does not show which accounts belong to the same person, so lexmit cannot find these by
+itself. Leave the field out if there are none.
 
 Mark where the status table goes in your README:
 

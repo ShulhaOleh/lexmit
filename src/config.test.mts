@@ -38,7 +38,45 @@ test('a missing config names the directory the search started from', (context) =
 })
 
 test('config accepts repository relative paths and a full commit id', () => {
-    assert.deepEqual(parseConfig(JSON.stringify(VALID)), VALID)
+    assert.deepEqual(parseConfig(JSON.stringify(VALID)), { ...VALID, maintainers: [] })
+})
+
+test('config accepts declared maintainer logins', () => {
+    const maintainers = ['Ruslan4234', 'a', 'octo-cat', 'a'.repeat(39)]
+    assert.deepEqual(parseWith({ maintainers })().maintainers, maintainers)
+    assert.deepEqual(parseWith({ maintainers: [] })().maintainers, [])
+})
+
+test('config rejects maintainers that are not a list of distinct GitHub logins', () => {
+    for (const maintainers of ['Ruslan4234', null, { login: 'Ruslan4234' }]) {
+        assert.throws(
+            parseWith({ maintainers }),
+            /maintainers must be an array of GitHub logins/u,
+            JSON.stringify(maintainers)
+        )
+    }
+    for (const login of [
+        '',
+        '-leading',
+        'trailing-',
+        'double--hyphen',
+        'under_score',
+        'with space',
+        '@octocat',
+        'a'.repeat(40),
+        42,
+        null,
+    ]) {
+        assert.throws(
+            parseWith({ maintainers: ['Valid', login] }),
+            /maintainers must hold GitHub logins/u,
+            JSON.stringify(login)
+        )
+    }
+    assert.throws(
+        parseWith({ maintainers: ['Ruslan4234', 'ruslan4234'] }),
+        /maintainers lists ruslan4234 more than once/u
+    )
 })
 
 test('config rejects unknown and missing keys', () => {

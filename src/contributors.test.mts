@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -9,8 +9,13 @@ import {
     applyMaintainerAttribution,
     collectTranslationContributors,
     fetchGitHubCommits,
+    gitLocaleReader,
+    legacyRevisionCheck,
+    localeCommitComparer,
     localeJsonChanged,
+    maintainerLogins,
 } from './contributors.mts'
+import { createGitAdapter } from './git.mts'
 
 const LOCALE_DIR = FIXTURE_LAYOUT.localeDir
 
@@ -27,10 +32,19 @@ function runGit(directory: string, args: string[]) {
     return execFileSync('git', args, { cwd: directory, encoding: 'utf8' }).trim()
 }
 
-type HistoryState = { source: string; target: string | undefined; author: string; message?: string }
+type HistoryState = {
+    source: string | Record<string, unknown>
+    target: string | undefined
+    author: string
+    message?: string
+}
+
+const FIXTURE_LOCALE_DIR = 'locales'
 
 function temporaryHistory(states: HistoryState[]) {
     const directory = mkdtempSync(join(tmpdir(), 'lexmit-i18n-attribution-'))
+    const localeDirectory = join(directory, FIXTURE_LOCALE_DIR)
+    mkdirSync(localeDirectory)
     runGit(directory, ['init', '-q'])
     runGit(directory, ['config', 'user.name', 'Fixture Default'])
     runGit(directory, ['config', 'user.email', 'fixture@example.test'])
@@ -38,11 +52,16 @@ function temporaryHistory(states: HistoryState[]) {
     const commits: { sha: string; parent: string | undefined; author: string }[] = []
     try {
         for (const state of states) {
-            writeFileSync(join(directory, 'en.json'), JSON.stringify({ key: state.source }))
+            writeFileSync(
+                join(localeDirectory, 'en.json'),
+                JSON.stringify(
+                    typeof state.source === 'string' ? { key: state.source } : state.source
+                )
+            )
             if (state.target === undefined) {
-                rmSync(join(directory, 'de.json'), { force: true })
+                rmSync(join(localeDirectory, 'de.json'), { force: true })
             } else {
-                writeFileSync(join(directory, 'de.json'), state.target)
+                writeFileSync(join(localeDirectory, 'de.json'), state.target)
             }
             runGit(directory, ['add', '-A'])
             runGit(directory, [
@@ -63,7 +82,8 @@ function temporaryHistory(states: HistoryState[]) {
         return {
             directory,
             commits,
-            collect() {
+            // Collects through the production comparer, with historyBaseline at the given commit.
+            collect({ baselineAt = 0 }: { baselineAt?: number } = {}) {
                 const apiCommits = commits
                     .slice()
                     .reverse()
@@ -75,25 +95,13 @@ function temporaryHistory(states: HistoryState[]) {
                 return collectContributorsOnly(
                     ['de'],
                     async (_localeId, page) => (page === 1 ? apiCommits : []),
-                    (_localeId, commit) => {
-                        const snapshot = (revision: string) => {
-                            const path = runGit(directory, [
-                                'ls-tree',
-                                '--name-only',
-                                revision,
-                                '--',
-                                'de.json',
-                            ])
-                            return path.length === 0
-                                ? undefined
-                                : runGit(directory, ['show', `${revision}:de.json`])
-                        }
-                        const current = snapshot(commit.sha)
-                        const previousSha = commit.parents[0]?.sha
-                        const previous = previousSha ? snapshot(previousSha) : undefined
-                        if (current === undefined) return false
-                        return localeJsonChanged(previous, current, 'de')
-                    }
+                    localeCommitComparer({
+                        readLocale: gitLocaleReader(directory, FIXTURE_LOCALE_DIR),
+                        isLegacy: legacyRevisionCheck(
+                            commits[baselineAt]!.sha,
+                            createGitAdapter({ cwd: directory }).isAncestor
+                        ),
+                    })
                 )
             },
         }
@@ -324,7 +332,7 @@ test('real Git locale creation credits translations but not scaffolds', async ()
         [
             { source: 'A', target: undefined, author: 'Source Maintainer' },
             {
-                source: 'A',
+                source: { scaffold: 'English', translated: 'Translation' },
                 target: JSON.stringify({
                     scaffold: '! English',
                     translated: 'Übersetzung',
@@ -342,12 +350,12 @@ test('real Git formatting-only changes receive no credit', async () => {
     await withTemporaryHistory(
         [
             {
-                source: 'A',
+                source: { one: 'One', two: 'Two' },
                 target: '{\n    "one": "X",\n    "two": "Y"\n}\n',
                 author: 'Translator A',
             },
             {
-                source: 'A',
+                source: { one: 'One', two: 'Two' },
                 target: '{"two":"Y","one":"X"}',
                 author: 'Formatter B',
             },
@@ -365,7 +373,8 @@ test('malformed historical target leaves fail closed through real Git collection
                 { source: 'A', target: JSON.stringify({ key: 'X' }), author: 'Translator A' },
                 { source: 'A', target: JSON.stringify({ key: 42 }), author: 'Broken Commit' },
             ],
-            (fixture) => fixture.collect()
+            // The broken commit comes after the baseline, where every file has to be valid.
+            (fixture) => fixture.collect({ baselineAt: 0 })
         ),
         /Invalid historical locale 'de'.*must be a string or object/s
     )
@@ -386,11 +395,300 @@ test('malformed target marker syntax remains rejected', () => {
 
 test('non-string historical target leaves fail closed', () => {
     for (const invalid of ['42', 'null', '["x"]']) {
-        assert.throws(
-            () => localeJsonChanged('{"key":"X"}', `{"key":${invalid}}`, 'de'),
-            /Invalid historical locale 'de'.*must be a string or object/s
+        for (const options of [{}, { previousLegacy: false, currentLegacy: false }]) {
+            assert.throws(
+                () => localeJsonChanged('{"key":"X"}', `{"key":${invalid}}`, 'de', 'r', options),
+                /Invalid historical locale 'de'.*must be a string or object/s
+            )
+        }
+    }
+})
+
+test('legacy revisions skip non-string values and still compare the strings', () => {
+    const legacy = { previousLegacy: true, currentLegacy: true }
+    for (const invalid of ['42', 'null', 'true', '["x"]', '[]']) {
+        assert.equal(
+            localeJsonChanged('{"key":"X"}', `{"key":${invalid}}`, 'de', 'r', legacy),
+            false,
+            invalid
+        )
+        assert.equal(
+            localeJsonChanged(
+                `{"key":${invalid},"other":"Y"}`,
+                `{"key":${invalid},"other":"Z"}`,
+                'de',
+                'r',
+                legacy
+            ),
+            true,
+            invalid
+        )
+        assert.equal(
+            localeJsonChanged(
+                `{"group":{"key":${invalid},"other":"Y"}}`,
+                `{"group":{"key":${invalid},"other":"Y"}}`,
+                'de',
+                'r',
+                legacy
+            ),
+            false,
+            invalid
         )
     }
+})
+
+test('legacy revisions skip blank strings and still compare the strings around them', () => {
+    const legacy = { previousLegacy: true, currentLegacy: true }
+    for (const blank of ['""', '"   "', '"\\n\\t"']) {
+        assert.equal(localeJsonChanged('{"key":"X"}', `{"key":${blank}}`, 'de', 'r', legacy), false)
+        assert.equal(
+            localeJsonChanged(
+                `{"key":${blank},"other":"Y"}`,
+                `{"key":${blank},"other":"Z"}`,
+                'de',
+                'r',
+                legacy
+            ),
+            true,
+            blank
+        )
+        assert.equal(
+            localeJsonChanged(
+                `{"key":${blank},"other":"Y"}`,
+                `{"key":${blank},"other":"Y"}`,
+                'de',
+                'r',
+                legacy
+            ),
+            false,
+            blank
+        )
+    }
+})
+
+test('an empty string after the baseline is still rejected', () => {
+    for (const blank of ['""', '"   "']) {
+        for (const options of [{}, { previousLegacy: true }]) {
+            assert.throws(
+                () => localeJsonChanged('{}', `{"key":${blank}}`, 'de', 'r', options),
+                /Invalid historical locale 'de'.*'key' is empty/s
+            )
+        }
+        assert.throws(
+            () =>
+                localeJsonChanged('{}', locale('X')!, 'de', 'r', {
+                    source: `{"key":${blank}}`,
+                }),
+            /Invalid historical locale 'en'.*'key' is empty/s
+        )
+    }
+})
+
+test('a legacy empty English string is skipped and its key becomes an orphan', () => {
+    const source = JSON.stringify({ empty: '', title: 'Title' })
+    const options = { currentLegacy: true, source }
+    assert.equal(
+        localeJsonChanged('{}', JSON.stringify({ empty: 'Leer' }), 'de', 'r', options),
+        false
+    )
+    assert.equal(
+        localeJsonChanged(
+            '{}',
+            JSON.stringify({ empty: 'Leer', title: 'Titel' }),
+            'de',
+            'r',
+            options
+        ),
+        true
+    )
+})
+
+test('legacy mode is chosen per revision, not per commit', () => {
+    const arrayParent = '{"dayAbbr":["So","Mo"]}'
+    const keyedChild = '{"dayAbbr":{"sun":"So","mon":"Mo"}}'
+    assert.equal(
+        localeJsonChanged(arrayParent, keyedChild, 'de', 'r', { previousLegacy: true }),
+        true
+    )
+    assert.throws(
+        () => localeJsonChanged(arrayParent, arrayParent, 'de', 'r', { previousLegacy: true }),
+        /'dayAbbr' must be a string or object/
+    )
+    assert.throws(
+        () => localeJsonChanged(arrayParent, keyedChild, 'de', 'r', { currentLegacy: true }),
+        /'dayAbbr' must be a string or object/
+    )
+})
+
+test('real Git restructure of a legacy array at the baseline compares without throwing', async () => {
+    await withTemporaryHistory(
+        [
+            {
+                source: { title: 'Title', dayAbbr: ['S', 'M'] },
+                target: JSON.stringify({ title: 'Titel', dayAbbr: ['So', 'Mo'] }),
+                author: 'Creator',
+            },
+            {
+                source: { title: 'Title', dayAbbr: { sun: 'S', mon: 'M' } },
+                target: JSON.stringify({ title: 'Titel', dayAbbr: { sun: 'So', mon: 'Mo' } }),
+                author: 'Adopter',
+            },
+        ],
+        async (fixture) => {
+            // The keyed values are new and differ from English, so the restructure counts.
+            assert.deepEqual(await fixture.collect({ baselineAt: 1 }), {
+                de: ['Adopter', 'Creator'],
+            })
+        }
+    )
+})
+
+test('real Git legacy commits credit string changes made next to an array', async () => {
+    await withTemporaryHistory(
+        [
+            {
+                source: { title: 'Title', days: ['S'], blank: '' },
+                target: JSON.stringify({ title: 'Titel', days: ['So'], blank: ' ' }),
+                author: 'Creator',
+            },
+            {
+                source: { title: 'Title', days: ['S', 'M'] },
+                target: JSON.stringify({ title: 'Titel', days: ['So', 'Mo'] }),
+                author: 'Array Editor',
+            },
+            {
+                source: { title: 'Title', days: ['S', 'M'] },
+                target: JSON.stringify({ title: 'Überschrift', days: ['So', 'Mo', 'Di'] }),
+                author: 'Translator',
+            },
+            {
+                source: { title: 'Title' },
+                target: JSON.stringify({ title: 'Überschrift' }),
+                author: 'Adopter',
+            },
+        ],
+        async (fixture) => {
+            assert.deepEqual(await fixture.collect({ baselineAt: 3 }), {
+                de: ['Creator', 'Translator'],
+            })
+        }
+    )
+})
+
+test('real Git baseline commit is not legacy', async () => {
+    await assert.rejects(
+        withTemporaryHistory(
+            [
+                { source: 'A', target: JSON.stringify({ key: 'X' }), author: 'Translator A' },
+                { source: 'A', target: JSON.stringify({ key: ['X'] }), author: 'Baseline' },
+            ],
+            (fixture) => fixture.collect({ baselineAt: 1 })
+        ),
+        /Invalid historical locale 'de'.*must be a string or object/s
+    )
+})
+
+test('the baseline ancestry check runs once per revision across locales', async () => {
+    const files = new Map([
+        ['base:en', '{"key":"A"}'],
+        ['one:en', '{"key":"A"}'],
+        ['one:de', '{"key":"X"}'],
+        ['one:fr', '{"key":"Y"}'],
+        ['two:en', '{"key":"A"}'],
+        ['two:de', '{"key":"Z"}'],
+        ['two:fr', '{"key":"W"}'],
+    ])
+    const asked: string[] = []
+    const commits = [
+        { sha: 'two', parents: [{ sha: 'one' }], author: { type: 'User', login: 'B' } },
+        { sha: 'one', parents: [{ sha: 'base' }], author: { type: 'User', login: 'A' } },
+    ]
+    const contributors = await collectContributorsOnly(
+        ['de', 'fr'],
+        async (_localeId, page) => (page === 1 ? commits : []),
+        localeCommitComparer({
+            readLocale: (revision, localeId) => files.get(`${revision}:${localeId}`),
+            isLegacy: legacyRevisionCheck('base', (ancestor, descendant) => {
+                assert.equal(descendant, 'base')
+                asked.push(ancestor)
+                return false
+            }),
+        })
+    )
+    assert.deepEqual(contributors, { de: ['A', 'B'], fr: ['A', 'B'] })
+    assert.deepEqual(asked.sort(), ['one', 'two'])
+})
+
+test('a target value copied from English earns no credit', () => {
+    const source = JSON.stringify({ key: 'Vanilla' })
+    for (const copied of ['Vanilla', '? Vanilla']) {
+        assert.equal(
+            localeJsonChanged(locale('VANILLA'), locale(copied)!, 'de', 'r', { source }),
+            false
+        )
+    }
+    assert.equal(
+        localeJsonChanged(locale('X'), locale('e\u0301')!, 'de', 'r', {
+            source: JSON.stringify({ key: 'é' }),
+        }),
+        false
+    )
+    assert.equal(
+        localeJsonChanged(locale('VANILLA'), locale('Vanille')!, 'de', 'r', { source }),
+        true
+    )
+})
+
+test('a translated change still credits next to a copied one', () => {
+    const source = JSON.stringify({ brand: 'Vanilla', title: 'Title' })
+    const before = JSON.stringify({ brand: 'VANILLA', title: 'Titel' })
+    assert.equal(
+        localeJsonChanged(
+            before,
+            JSON.stringify({ brand: 'Vanilla', title: 'Überschrift' }),
+            'de',
+            'r',
+            {
+                source,
+            }
+        ),
+        true
+    )
+    assert.equal(
+        localeJsonChanged(before, JSON.stringify({ brand: 'Vanilla', title: 'Titel' }), 'de', 'r', {
+            source,
+        }),
+        false
+    )
+})
+
+test('a target key without an English counterpart earns no credit', () => {
+    const source = JSON.stringify({ key: 'Key' })
+    assert.equal(
+        localeJsonChanged('{}', JSON.stringify({ langZhCN: '简体中文' }), 'de', 'r', { source }),
+        false
+    )
+    assert.equal(
+        localeJsonChanged('{}', JSON.stringify({ key: 'Schlüssel' }), 'de', 'r', { source }),
+        true
+    )
+})
+
+test('English that never parsed cannot rule out a change', () => {
+    assert.equal(localeJsonChanged(locale('X'), locale('Y')!, 'de', 'r', { source: '{' }), true)
+})
+
+test('real Git compares a target with English at the same commit, not its parent', async () => {
+    await withTemporaryHistory(
+        [
+            { source: 'Moin', target: JSON.stringify({ key: 'Hallo' }), author: 'Creator' },
+            { source: 'Hello', target: JSON.stringify({ key: 'Moin' }), author: 'Translator' },
+            { source: 'Plain', target: JSON.stringify({ key: 'Plain' }), author: 'Copier' },
+        ],
+        async (fixture) => {
+            assert.deepEqual(await fixture.collect(), { de: ['Creator', 'Translator'] })
+        }
+    )
 })
 
 test('maintainer attribution keeps a maintainer only where they created the locale', () => {
@@ -455,6 +753,37 @@ test('a promoted maintainer loses credit only where they did not create the loca
         { uk: 'ShevRuslan1', fr: 'FrenchTranslator' }
     )
     assert.deepEqual(credited, { uk: ['ShevRuslan1'] })
+})
+
+test('declared maintainers are removed where they did not create the locale', () => {
+    const maintainers = maintainerLogins(new Set(['ShevRuslan1', 'ShulhaOleh']), ['Ruslan4234'])
+    const credited = applyMaintainerAttribution(
+        {
+            uk: ['Ruslan4234', 'ShevRuslan1', 'tozetsu'],
+            'zh-CN': ['Ruslan4234', 'tozetsu'],
+        },
+        maintainers,
+        { uk: 'ShevRuslan1', 'zh-CN': 'tozetsu' }
+    )
+    assert.deepEqual(credited, { uk: ['ShevRuslan1', 'tozetsu'], 'zh-CN': ['tozetsu'] })
+})
+
+test('a declared maintainer who created the locale keeps the credit', () => {
+    const credited = applyMaintainerAttribution(
+        { uk: ['Ruslan4234'], fr: ['Ruslan4234', 'FrenchTranslator'] },
+        maintainerLogins([], ['Ruslan4234']),
+        { uk: 'Ruslan4234', fr: 'FrenchTranslator' }
+    )
+    assert.deepEqual(credited, { uk: ['Ruslan4234'], fr: ['FrenchTranslator'] })
+})
+
+test('maintainer matching ignores the case of logins', () => {
+    const credited = applyMaintainerAttribution(
+        { uk: ['Ruslan4234', 'ShulhaOleh', 'ShevRuslan1'], de: ['TarekLP'] },
+        maintainerLogins(new Set(['shulhaoleh', 'SHEVRUSLAN1']), ['ruslan4234']),
+        { uk: 'shevruslan1', de: 'tareklp' }
+    )
+    assert.deepEqual(credited, { uk: ['ShevRuslan1'], de: ['TarekLP'] })
 })
 
 test('the oldest commit for a locale is reported as its creator', async () => {

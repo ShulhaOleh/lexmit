@@ -10,6 +10,7 @@ type LexmitConfig = {
     statusAssetDir: string
     contributorsFile: string
     translationGuide: string
+    maintainers: string[]
 }
 
 const CONFIG_KEYS = [
@@ -19,6 +20,7 @@ const CONFIG_KEYS = [
     'statusAssetDir',
     'contributorsFile',
     'translationGuide',
+    'maintainers',
 ] as const
 
 // The config sits at the Git repository root and commands may run from any directory below it.
@@ -64,6 +66,30 @@ function parseBaseline(value: unknown) {
     return value
 }
 
+const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/u
+
+// Accounts listed here are treated like repository admins when crediting translators. GitHub
+// logins are case-insensitive, so two entries that differ only in case are duplicates.
+function parseMaintainers(value: unknown) {
+    if (value === undefined) return []
+    if (!Array.isArray(value)) {
+        throw new Error(`${CONFIG_FILE}: maintainers must be an array of GitHub logins`)
+    }
+    const seen = new Set<string>()
+    for (const login of value) {
+        if (typeof login !== 'string' || !GITHUB_LOGIN.test(login)) {
+            throw new Error(
+                `${CONFIG_FILE}: maintainers must hold GitHub logins, got ${JSON.stringify(login)}`
+            )
+        }
+        if (seen.has(login.toLowerCase())) {
+            throw new Error(`${CONFIG_FILE}: maintainers lists ${login} more than once`)
+        }
+        seen.add(login.toLowerCase())
+    }
+    return value as string[]
+}
+
 export function parseConfig(text: string): LexmitConfig {
     const raw: unknown = JSON.parse(text)
     if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
@@ -83,6 +109,7 @@ export function parseConfig(text: string): LexmitConfig {
         statusAssetDir: parseRepositoryPath('statusAssetDir', fields.statusAssetDir),
         contributorsFile: parseRepositoryPath('contributorsFile', fields.contributorsFile),
         translationGuide: parseRepositoryPath('translationGuide', fields.translationGuide),
+        maintainers: parseMaintainers(fields.maintainers),
     }
     // Every JSON file directly inside localeDir is read as a language.
     if (config.contributorsFile.startsWith(`${config.localeDir}/`)) {
