@@ -76,10 +76,12 @@ translation nobody can see.
 ## Why history replay tolerates stale scaffolds
 
 Between an English commit and the bot's next run, every intermediate revision holds scaffolds
-quoting superseded English. History replay walks every revision from the audited baseline, so
+quoting superseded English. History replay walks every revision from the baseline, so
 rejecting that drift would let a single ordinary commit break every later analysis permanently.
 `analyzeCommittedHistory` therefore does not check scaffold freshness. Malformed markers,
 a `? ` marker without accepted lineage, and a missing or non-ancestor baseline still fail closed.
+The baseline is the commit that added `lexmit.config.json`, unless `historyBaseline` names
+another.
 
 ## Unreadable historical evidence
 
@@ -94,8 +96,8 @@ with incomplete evidence reported separately. History-dependent validation and m
 fail before writing when a usable target still depends on that evidence. Absence and scaffolds
 remain Missing.
 
-Malformed historical files are never repaired in code. Once a fix lands, the baseline may move
-to the fixing commit if replay from there yields the same effective state for every entry.
+Malformed historical files are never repaired in code. Once a fix lands, `historyBaseline` may
+name the fixing commit if replay from there yields the same effective state for every entry.
 Otherwise the affected targets stay Review until they are accepted again.
 
 An observable Edit against readable English or removal of a committed explicit review marker can

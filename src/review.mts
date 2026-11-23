@@ -284,7 +284,7 @@ export function prepareI18nReview(
 
     const committedHistory = analyzeCommittedHistory({
         cwd,
-        baseline: options.baseline ?? lexmitConfig().historyBaseline,
+        baseline: options.baseline,
         localeDir,
         revision: options.revision,
         localeId: options.localeId,

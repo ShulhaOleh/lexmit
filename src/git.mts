@@ -159,6 +159,29 @@ export function createGitAdapter({
             return result.stdout.toString('utf8').split('\n').filter(Boolean)
         },
 
+        // The newest commit on the first-parent chain whose diff adds path, or undefined if
+        // none does. --first-parent diffs a merge against its first parent, so a merge that
+        // brings the file in counts as adding it. A shallow clone makes its oldest commit add
+        // every file, so callers must refuse one before asking.
+        firstParentAddition(path: string, revision: string) {
+            const result = call([
+                'log',
+                '--first-parent',
+                '--diff-filter=A',
+                '--no-show-signature',
+                '--format=%H',
+                '-1',
+                revision,
+                '--',
+                path,
+            ])
+            const id = result.stdout.toString('utf8').trim()
+            if (id === '') return undefined
+            if (!/^[0-9a-f]{40}([0-9a-f]{24})?$/u.test(id))
+                throw new Error('git log returned an invalid commit id ' + JSON.stringify(id))
+            return id
+        },
+
         // Path limiting keeps unrelated commits out of the walk without hiding a revision
         // that changed the locale directory, so non-i18n work between two locale commits
         // costs nothing.

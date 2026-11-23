@@ -4,7 +4,7 @@ import { dirname, join, resolve } from 'node:path'
 export const CONFIG_FILE = 'lexmit.config.json'
 
 type LexmitConfig = {
-    historyBaseline: string
+    historyBaseline?: string
     localeDir: string
     readme: string
     statusAssetDir: string
@@ -58,7 +58,8 @@ function parseRepositoryPath(key: string, value: unknown) {
 
 // Acceptance reconstruction starts at the audited baseline. Pre-baseline events create no
 // review debt. Rewriting repository history requires a new audit, never a guessed baseline,
-// so only a full commit id is accepted.
+// so only a full commit id is accepted. Without one, the baseline is the commit that added
+// this file, which history.mts derives from Git.
 function parseBaseline(value: unknown) {
     if (typeof value !== 'string' || !/^[0-9a-f]{40}$/u.test(value)) {
         throw new Error(`${CONFIG_FILE}: historyBaseline must be a full 40 character commit id`)
@@ -103,7 +104,9 @@ export function parseConfig(text: string): LexmitConfig {
     }
     const fields = raw as Record<string, unknown>
     const config = {
-        historyBaseline: parseBaseline(fields.historyBaseline),
+        ...(fields.historyBaseline === undefined
+            ? {}
+            : { historyBaseline: parseBaseline(fields.historyBaseline) }),
         localeDir: parseRepositoryPath('localeDir', fields.localeDir),
         readme: parseRepositoryPath('readme', fields.readme),
         statusAssetDir: parseRepositoryPath('statusAssetDir', fields.statusAssetDir),

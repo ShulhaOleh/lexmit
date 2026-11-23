@@ -9,6 +9,7 @@ import { inspectLocales, SOURCE_LOCALE } from './inspection.mts'
 import { flattenBundle } from './current.mts'
 import { errorMessage } from './io.mts'
 import { createGitAdapter } from './git.mts'
+import { resolveHistoryBaseline } from './history.mts'
 
 type GitHubCommit = {
     sha: string
@@ -183,7 +184,7 @@ export function localeCommitComparer({
     return (localeId: string, commit: GitHubCommit) => {
         read ??= gitLocaleReader(lexmitConfig().root, lexmitConfig().localeDir)
         legacyAt ??= legacyRevisionCheck(
-            lexmitConfig().historyBaseline,
+            resolveHistoryBaseline({ cwd: lexmitConfig().root }).commit,
             createGitAdapter({ cwd: lexmitConfig().root }).isAncestor
         )
         const current = read(commit.sha, localeId)

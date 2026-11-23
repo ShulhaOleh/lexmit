@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { basename, join, relative, sep } from 'node:path'
 import { parseTargetValue, TARGET_VALUE_KIND, type TargetValue } from './runtime.mts'
-import { lexmitConfig } from './config.mts'
+import { CONFIG_FILE, lexmitConfig, loadConfig } from './config.mts'
 import { createGitAdapter, GitBlobDecodeError } from './git.mts'
 import { errorMessage } from './io.mts'
 import {
@@ -31,6 +31,7 @@ export type HistoryGit = Pick<
     | 'resolveRevision'
     | 'isShallow'
     | 'isAncestor'
+    | 'firstParentAddition'
     | 'hasLegacyGrafts'
     | 'firstParentChain'
     | 'firstParentRevisions'
@@ -50,6 +51,7 @@ export type HistoryOptions = {
 }
 export type HistoryAnalysis = {
     baseline: string
+    baselineOrigin?: BaselineOrigin
     revision: string
     revisions: string[]
     snapshot: HistorySnapshot
@@ -117,21 +119,41 @@ export const HISTORY_UNAVAILABLE = Object.freeze({
     HISTORY_INCOMPLETE: 'history-incomplete',
     LEGACY_GRAFTS: 'legacy-grafts',
     REVISION_MISSING: 'revision-missing',
+    CONFIG_NOT_COMMITTED: 'config-not-committed',
 } as const)
+
+// A baseline is either named in the config or derived from the commit that added the config.
+// The adopting commit is the one being staged with the config, before it has an id.
+export const BASELINE_ORIGIN = Object.freeze({
+    CONFIG: 'config',
+    DERIVED: 'derived',
+    ADOPTING: 'adopting',
+} as const)
+export type BaselineOrigin = (typeof BASELINE_ORIGIN)[keyof typeof BASELINE_ORIGIN]
+export type ResolvedBaseline = { commit: string; origin: BaselineOrigin }
+
+const DERIVED_BASELINE_HINT =
+    `The baseline is the commit that added ${CONFIG_FILE}. ` +
+    'Add the config in the same commit as the locale fixes, or set historyBaseline.'
 
 export class I18nHistoryUnavailableError extends Error {
     reason: (typeof HISTORY_UNAVAILABLE)[keyof typeof HISTORY_UNAVAILABLE]
-    baseline: string
+    baseline: string | undefined
     constructor(
         reason: (typeof HISTORY_UNAVAILABLE)[keyof typeof HISTORY_UNAVAILABLE],
         detail: string,
-        baseline: string
+        baseline: string | undefined
     ) {
+        // An uncommitted config is not a history problem, so fetching more history cannot help.
+        const fetchAdvice =
+            reason === HISTORY_UNAVAILABLE.CONFIG_NOT_COMMITTED
+                ? ''
+                : `Full i18n history${baseline ? ` through ${baseline}` : ''} is required.\n`
         super(
             `${detail}\n` +
-                `Full i18n history through ${baseline} is required.\n` +
+                fetchAdvice +
                 'This checkout was not modified.\n' +
-                'Fetch full history or rely on CI.\n' +
+                (fetchAdvice ? 'Fetch full history or rely on CI.\n' : '') +
                 'Use lexmit fill <locale> for history-independent scaffolding.'
         )
         this.name = 'I18nHistoryUnavailableError'
@@ -403,10 +425,116 @@ function assertHistoryAvailable(git: HistoryGit, baseline: string, revision: str
     )
 }
 
-export function describeHistoryAvailability(options: HistoryOptions = {}) {
-    const baseline = options.baseline ?? lexmitConfig().historyBaseline
-    const git = options.git ?? createGitAdapter({ cwd: options.cwd })
+const derivedBaselines = new Map<string, string>()
+
+// The baseline is where the project adopted lexmit. A commit id written into the config does
+// not survive squash or rebase merges, which replace the adopting commit, but the commit that
+// added the config is found again after any merge strategy. An explicit id still wins.
+// Derivation is cached per process, like the config itself.
+export function resolveHistoryBaseline({
+    cwd,
+    git,
+    revision = 'HEAD',
+}: {
+    cwd?: string
+    git?: Pick<HistoryGit, 'isShallow' | 'resolveRevision' | 'firstParentAddition'>
+    revision?: string
+} = {}): ResolvedBaseline {
+    const config = cwd === undefined ? lexmitConfig() : loadConfig(cwd)
+    if (config.historyBaseline !== undefined) {
+        return { commit: config.historyBaseline, origin: BASELINE_ORIGIN.CONFIG }
+    }
+    const key = config.root + '\0' + revision
+    const cached = derivedBaselines.get(key)
+    if (cached) return { commit: cached, origin: BASELINE_ORIGIN.DERIVED }
+
+    const adapter = git ?? createGitAdapter({ cwd })
+    // In a shallow clone the oldest fetched commit appears to add every file, so the lookup
+    // would silently return the wrong commit.
+    if (adapter.isShallow()) {
+        throw new I18nHistoryUnavailableError(
+            HISTORY_UNAVAILABLE.HISTORY_INCOMPLETE,
+            'Deriving the baseline needs full history. Fetch with fetch-depth 0, or set historyBaseline.',
+            undefined
+        )
+    }
+    const head = adapter.resolveRevision(revision)
+    if (!head && revision !== 'HEAD') {
+        throw new I18nHistoryUnavailableError(
+            HISTORY_UNAVAILABLE.REVISION_MISSING,
+            `Revision ${revision} could not be resolved.`,
+            undefined
+        )
+    }
+    // Git pathspecs are relative to the working directory, which may sit below the config.
+    const path = relative(cwd ?? process.cwd(), join(config.root, CONFIG_FILE))
+        .split(sep)
+        .join('/')
+    const commit = head && adapter.firstParentAddition(path, head)
+    if (!commit) {
+        throw new I18nHistoryUnavailableError(
+            HISTORY_UNAVAILABLE.CONFIG_NOT_COMMITTED,
+            `${CONFIG_FILE} is not committed yet, so there is no history to check. ` +
+                'Commit it with valid locale files, or set historyBaseline.',
+            undefined
+        )
+    }
+    derivedBaselines.set(key, commit)
+    return { commit, origin: BASELINE_ORIGIN.DERIVED }
+}
+
+// One line naming the commit history starts from, so nobody has to guess which one was used.
+// A caller that passed a baseline in already knows it, so nothing is printed.
+export function formatHistoryBaseline(commit: string, origin: BaselineOrigin | undefined) {
+    if (origin === undefined) return undefined
+    if (origin === BASELINE_ORIGIN.ADOPTING) return `Baseline this commit (adds ${CONFIG_FILE})`
+    const source = origin === BASELINE_ORIGIN.CONFIG ? 'historyBaseline' : `added ${CONFIG_FILE}`
+    return `Baseline ${commit.slice(0, 7)} (${source})`
+}
+
+// Commands that work without history still name the baseline, or say why it is unknown.
+export function describeHistoryBaseline(options: Parameters<typeof resolveHistoryBaseline>[0]) {
     try {
+        const { commit, origin } = resolveHistoryBaseline(options)
+        return formatHistoryBaseline(commit, origin)!
+    } catch (error) {
+        return `Baseline unavailable: ${errorMessage(error).split('\n')[0]}`
+    }
+}
+
+function resolveOptionBaseline(
+    options: HistoryOptions,
+    git: HistoryGit
+): { commit: string; origin: BaselineOrigin | undefined } {
+    if (options.baseline !== undefined) return { commit: options.baseline, origin: undefined }
+    return resolveHistoryBaseline({ cwd: options.cwd, git, revision: options.revision })
+}
+
+// Invalid locale files at a derived baseline mean the config was committed before the fixes.
+// The validation error alone does not say why that commit was the one checked.
+function explainBaselineErrors(origin: BaselineOrigin | undefined) {
+    return function atBaseline<T>(step: () => T): T {
+        if (origin !== BASELINE_ORIGIN.DERIVED) return step()
+        try {
+            return step()
+        } catch (error) {
+            if (
+                error instanceof I18nHistoryDataError ||
+                error instanceof I18nHistoryStateError ||
+                error instanceof GitBlobDecodeError
+            ) {
+                error.message += `\n${DERIVED_BASELINE_HINT}`
+            }
+            throw error
+        }
+    }
+}
+
+export function describeHistoryAvailability(options: HistoryOptions = {}) {
+    const git = options.git ?? createGitAdapter({ cwd: options.cwd })
+    let baseline: string | undefined
+    try {
+        baseline = resolveOptionBaseline(options, git).commit
         const head = assertHistoryAvailable(git, baseline, options.revision ?? 'HEAD')
         return { available: true, baseline, revision: head }
     } catch (error) {
@@ -420,7 +548,8 @@ function loadSnapshots(
     revisions: string[],
     localeDir: string,
     cache: ReturnType<typeof createBundleCache>,
-    localeId?: string
+    localeId?: string,
+    atBaseline = <T,>(step: () => T) => step()
 ) {
     const blobPathsByRevision = git.treesAtRevisions
         ? [...git.treesAtRevisions(revisions, localeDir)]
@@ -445,8 +574,11 @@ function loadSnapshots(
     const contents = git.readBlobObservations
         ? git.readBlobObservations([...wanted])
         : git.readBlobs([...wanted])
-    return blobPathsByRevision.map(([revision, blobPaths]) =>
-        buildSnapshot(revision, blobPaths, contents, cache)
+    // The baseline is built first, so a blob it shares with later revisions fails there.
+    return blobPathsByRevision.map(([revision, blobPaths], index) =>
+        index === 0
+            ? atBaseline(() => buildSnapshot(revision, blobPaths, contents, cache))
+            : buildSnapshot(revision, blobPaths, contents, cache)
     )
 }
 
@@ -465,21 +597,22 @@ function assertPendingLineage(snapshot: HistorySnapshot, state: HistoryState) {
 }
 
 export function analyzeCommittedHistory(options: HistoryOptions = {}): HistoryAnalysis {
-    const baseline = options.baseline ?? lexmitConfig().historyBaseline
     const localeDir = options.localeDir ?? lexmitConfig().localeDir
     const git = options.git ?? createGitAdapter({ cwd: options.cwd })
+    const { commit: baseline, origin } = resolveOptionBaseline(options, git)
+    const atBaseline = explainBaselineErrors(origin)
     const head = assertHistoryAvailable(git, baseline, options.revision ?? 'HEAD')
 
     const counters = { bundleParses: 0 }
     const cache = createBundleCache(counters)
     const revisions = [baseline, ...git.firstParentRevisions(baseline, head, localeDir)]
-    const snapshots = loadSnapshots(git, revisions, localeDir, cache, options.localeId)
+    const snapshots = loadSnapshots(git, revisions, localeDir, cache, options.localeId, atBaseline)
 
     // Historical scaffolds can quote superseded English between a source commit and bot repair.
-    assertReadableSnapshot(snapshots[0]!)
+    atBaseline(() => assertReadableSnapshot(snapshots[0]!))
     assertReadableSnapshot(snapshots[snapshots.length - 1]!)
     const state = applyBaseline(createHistoryState(), snapshots[0]!, baseline)
-    assertPendingLineage(snapshots[0]!, state)
+    atBaseline(() => assertPendingLineage(snapshots[0]!, state))
     const events: HistoryEvent[] = []
     for (let index = 1; index < snapshots.length; index += 1) {
         applyEvidenceGaps(state, snapshots[index - 1]!, snapshots[index]!)
@@ -495,6 +628,7 @@ export function analyzeCommittedHistory(options: HistoryOptions = {}): HistoryAn
 
     return {
         baseline,
+        ...(origin === undefined ? {} : { baselineOrigin: origin }),
         revision: head,
         revisions,
         snapshot: { ...snapshots[snapshots.length - 1]!, revision: head },
@@ -508,6 +642,26 @@ export function analyzeCommittedHistory(options: HistoryOptions = {}): HistoryAn
             blobLoads: git.counters?.blobLoads,
             bundleParses: counters.bundleParses,
         },
+    }
+}
+
+// The adopting commit adds the config, so once committed it is the derived baseline itself.
+// Its snapshot is analyzed as a baseline with nothing before it, which leaves no review debt.
+export function analyzeAdoptingSnapshot(snapshot: HistorySnapshot): HistoryAnalysis {
+    assertReadableSnapshot(snapshot)
+    const state = applyBaseline(createHistoryState(), snapshot, snapshot.revision)
+    assertPendingLineage(snapshot, state)
+    return {
+        baseline: snapshot.revision,
+        baselineOrigin: BASELINE_ORIGIN.ADOPTING,
+        revision: snapshot.revision,
+        revisions: [snapshot.revision],
+        snapshot,
+        gaps: snapshot.gaps,
+        state,
+        events: [],
+        committedEvents: [],
+        stats: { revisions: 1, gitCalls: undefined, blobLoads: undefined, bundleParses: 0 },
     }
 }
 

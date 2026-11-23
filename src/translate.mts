@@ -180,11 +180,13 @@ export function runI18nStatus({
     stdout = process.stdout,
     stderr = process.stderr,
     env = process.env,
-}: CliOptions = {}) {
+    baselineLine,
+}: CliOptions & { baselineLine?: string } = {}) {
     let inspection
     try {
         inspection = inspectLocales(i18nDir)
         const summaries = buildStatusSummaries(inspection)
+        if (baselineLine) stdout.write(`${baselineLine}\n`)
         renderStatus({
             summaries,
             capabilities: detectCliCapabilities({ stdout, env }),
@@ -1107,5 +1109,16 @@ export async function runI18nCli(args: string[], options: CliOptions = {}) {
         return runInteractiveI18n(args[1]!, options)
     }
     if (args.length === 0) return runI18nValidation(options)
+    // Status reads only the stored markers, but it names the baseline the history commands
+    // start from. A locale folder given without its config is reported as plain files.
+    if (args.length === 1 && args[0] === '--status' && options.i18nDir === undefined) {
+        const { describeHistoryBaseline } = await import('./history.mts')
+        const { root, i18nDir } = lexmitConfig()
+        return runI18nStatus({
+            ...options,
+            i18nDir,
+            baselineLine: describeHistoryBaseline({ cwd: root }),
+        })
+    }
     return runCheckI18n(args, options)
 }

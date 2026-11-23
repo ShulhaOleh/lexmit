@@ -119,3 +119,18 @@ test('config rejects an abbreviated or symbolic history baseline', () => {
         assert.throws(parseWith({ historyBaseline }), /historyBaseline must be a full/u)
     }
 })
+
+test('config without historyBaseline leaves the baseline to be derived', () => {
+    const { historyBaseline, ...layout } = VALID
+    const config = parseConfig(JSON.stringify(layout))
+    for (const [key, value] of Object.entries(layout)) {
+        assert.equal(config[key as keyof typeof config], value, key)
+    }
+    assert.equal('historyBaseline' in config, false)
+})
+
+test('a present history baseline is still validated', () => {
+    for (const historyBaseline of [null, '', 42]) {
+        assert.throws(parseWith({ historyBaseline }), /historyBaseline must be a full/u)
+    }
+})

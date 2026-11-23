@@ -1,17 +1,19 @@
 import { errorMessage, type CliIO } from './io.mts'
 import type { LocaleBundle } from './files.mts'
-import type { HistoryGit } from './history.mts'
+import type { HistoryAnalysis, HistoryGit } from './history.mts'
 import type { HistoryEvent, HistorySnapshot } from './history-events.mts'
 import type { SyncPlan, SyncOperation } from './sync.mts'
 import { serializeLocale } from './files.mts'
 import { formatTargetValue, TARGET_VALUE_KIND } from './runtime.mts'
 import { HISTORY_EVENT } from './history-events.mts'
-import { lexmitConfig } from './config.mts'
+import { CONFIG_FILE, lexmitConfig, loadConfig } from './config.mts'
 import {
+    analyzeAdoptingSnapshot,
     analyzeCommittedHistory,
     analyzeRepairableProspective,
     stagedSnapshot,
     assertHistoryDecisionEvidence,
+    formatHistoryBaseline,
     workingTreeSnapshot,
 } from './history.mts'
 import { createGitAdapter } from './git.mts'
@@ -24,9 +26,11 @@ type EnforcementOptions = {
     snapshot?: HistorySnapshot
     git?: HistoryGit & Pick<ReturnType<typeof createGitAdapter>, 'stagedChangedPaths'>
 }
+type AnalysisOptions = EnforcementOptions & { adopting?: boolean }
 type EnforcementResult = {
     pass: boolean
     skipped: boolean
+    history?: Pick<HistoryAnalysis, 'baseline' | 'baselineOrigin'>
     operations: { locale: string; key: string; kind: string }[]
     allOperations: SyncOperation[]
     workflowSummary?: ReturnType<typeof summarizeWorkflow>
@@ -184,13 +188,17 @@ export function stagedI18nPaths({
 function analyzeSnapshot({
     cwd = lexmitConfig().root,
     localeDir = lexmitConfig().localeDir,
-    baseline = lexmitConfig().historyBaseline,
+    baseline,
     snapshot,
     git,
-}: EnforcementOptions = {}) {
+    adopting = false,
+}: AnalysisOptions = {}) {
     const adapter = git ?? createGitAdapter({ cwd })
-    const committed = analyzeCommittedHistory({ cwd, localeDir, baseline, git: adapter })
+    const history = adopting
+        ? undefined
+        : analyzeCommittedHistory({ cwd, localeDir, baseline, git: adapter })
     const currentSnapshot = snapshot ?? workingTreeSnapshot(cwd, localeDir)
+    const committed = history ?? analyzeAdoptingSnapshot(currentSnapshot)
     if (currentSnapshot.source.size === 0) {
         throw new Error('Staged/current English source locale is missing')
     }
@@ -224,7 +232,10 @@ function analyzeSnapshot({
 // Is this tree valid translation data? A source-only change is, and so is a translation whose
 // English moved before the bot wrote its marker. Reaching this return means the plan validated.
 export function checkI18nSemantics(options: EnforcementOptions = {}) {
-    const analysis = analyzeSnapshot(options)
+    return semanticResult(analyzeSnapshot(options))
+}
+
+function semanticResult(analysis: ReturnType<typeof analyzeSnapshot>) {
     return {
         pass: true,
         skipped: false as const,
@@ -252,11 +263,31 @@ export function checkI18nSnapshot(options: EnforcementOptions = {}) {
     }
 }
 
+// The config sits at the repository root, so its staged path is the bare file name.
+function adoptsConfig(
+    cwd: string,
+    git: Pick<HistoryGit, 'resolveRevision' | 'treeBlobs'>,
+    staged: string[]
+) {
+    if (!staged.includes(CONFIG_FILE)) return false
+    if (git.resolveRevision('HEAD') && git.treeBlobs('HEAD', CONFIG_FILE).size > 0) return false
+    return loadConfig(cwd).historyBaseline === undefined
+}
+
 export function checkStagedI18n(options: EnforcementOptions = {}) {
     const cwd = options.cwd ?? lexmitConfig().root
     const localeDir = options.localeDir ?? lexmitConfig().localeDir
     const git = options.git ?? createGitAdapter({ cwd })
-    if (stagedI18nPaths({ cwd, localeDir, git }).length === 0) {
+    const staged = git.stagedChangedPaths()
+    // A pre-commit hook on the adopting commit has no committed baseline yet. The staged files
+    // are the baseline to be, so they are checked alone and the commit can pass its own hook.
+    if (options.baseline === undefined && adoptsConfig(cwd, git, staged)) {
+        const snapshot = stagedSnapshot(git, localeDir)
+        return semanticResult(
+            analyzeSnapshot({ ...options, cwd, localeDir, git, snapshot, adopting: true })
+        )
+    }
+    if (!staged.some((path) => relevantPath(path, localeDir))) {
         return { pass: true, skipped: true as const, operations: [], allOperations: [] }
     }
     return checkI18nSemantics({
@@ -309,6 +340,10 @@ export function runI18nEnforcement(
             stdout.write(`${label} skipped (no staged locale/source files).\n`)
             return 0
         }
+        const baseline =
+            result.history &&
+            formatHistoryBaseline(result.history.baseline, result.history.baselineOrigin)
+        if (baseline) stdout.write(`${baseline}\n`)
         if (!result.pass) {
             stderr.write(`${formatEnforcementFailure(result)}\n`)
             return 1

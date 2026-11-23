@@ -305,7 +305,7 @@ export function synchronizeI18n(options: SyncOptions = {}): SyncResult {
 
     const committedHistory = analyzeCommittedHistory({
         cwd,
-        baseline: options.baseline ?? lexmitConfig().historyBaseline,
+        baseline: options.baseline,
         localeDir,
         revision: options.revision,
     })

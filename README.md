@@ -39,7 +39,6 @@ and uses forward slashes.
 
 ```json
 {
-    "historyBaseline": "0123456789abcdef0123456789abcdef01234567",
     "localeDir": "locales",
     "readme": "README.md",
     "statusAssetDir": "assets/i18n/status",
@@ -50,7 +49,7 @@ and uses forward slashes.
 
 | Field              | What it is                                               |
 | ------------------ | -------------------------------------------------------- |
-| `historyBaseline`  | Full id of the commit that history starts from           |
+| `historyBaseline`  | Optional. Full id of the commit that history starts from |
 | `localeDir`        | The folder holding `en.json` and the other languages     |
 | `readme`           | The file that gets the status table                      |
 | `statusAssetDir`   | Where the per-language status images are written         |
@@ -58,9 +57,15 @@ and uses forward slashes.
 | `translationGuide` | The guide the status table links translators to          |
 | `maintainers`      | Optional GitHub logins treated like repository admins    |
 
-History replay starts at `historyBaseline`, and every unmarked translation in that commit counts
-as Accepted. The locale files there have to be valid, so fix any check errors first, commit, and
-use that commit. On a project adopting lexmit, that is the latest commit on the main branch.
+History replay starts at a baseline commit, and every unmarked translation in that commit counts
+as Accepted. Without `historyBaseline`, the baseline is the commit that added
+`lexmit.config.json`. Git finds that commit again after a squash merge, a merge commit or a
+rebase merge, so nothing needs updating once the pull request lands. Set `historyBaseline` only
+to start history somewhere else. `lexmit verify` and `lexmit status` print the baseline in use.
+
+The locale files at the baseline have to be valid. To adopt lexmit, fix any check errors and add
+the config in the same pull request as the locale fixes, no earlier than the commit that fixes
+them.
 
 `maintainers` lists GitHub logins treated as maintainers in addition to repository admins, for
 example a maintainer's second account. Maintainers are credited only for languages they created.
@@ -141,7 +146,8 @@ Both return the tag unchanged when the platform has no name for it.
 
 ## In CI
 
-Check every push with full history:
+Check every push with full history. lexmit also finds the baseline in that history, so in a
+shallow clone it stops rather than pick the wrong commit:
 
 ```yaml
 - uses: actions/checkout@v7
