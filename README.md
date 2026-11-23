@@ -94,6 +94,21 @@ cp node_modules/@shulha/lexmit/assets/legend/*.svg assets/i18n/status/legend/
 | `lexmit presentation --check` | Check that the README table and images are current     |
 | `lexmit presentation --write` | Write the README table and images                      |
 
+## Terminal output
+
+`lexmit status` draws a coverage bar for each language only when it writes to a terminal. Piped or
+redirected output is one plain line per language. The bar shrinks from 40 cells to 32 to fit the
+terminal, and a terminal too narrow for a 32-cell bar gets rows without bars. When the terminal does
+not report its width, lexmit reads `COLUMNS`, and when that is not set either, it draws the 40-cell
+bar. Set `COLUMNS` to pass the width yourself:
+
+```sh
+COLUMNS=120 lexmit status
+```
+
+`NO_COLOR`, `CI` (unless empty or `0`) and `TERM=dumb` each switch to the plain output, even in a
+terminal.
+
 ## In your app
 
 Locale files keep the markers in the text, so resolve each string before showing it. The runtime

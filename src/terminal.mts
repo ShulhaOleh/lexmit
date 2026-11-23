@@ -50,6 +50,16 @@ export function terminalWidth(text: string) {
     return width
 }
 
+// A terminal can report a TTY that is 0 columns wide, such as a pseudo-terminal whose size was
+// never set, so COLUMNS can supply the width. Only plain digits with no leading zero count, and
+// anything else leaves the width unknown.
+function measuredColumns(stdout: Pick<CliOutput, 'columns'>, env: NodeJS.ProcessEnv) {
+    if (Number.isFinite(stdout.columns) && stdout.columns! > 0) return stdout.columns!
+    return env.COLUMNS !== undefined && /^[1-9]\d*$/u.test(env.COLUMNS)
+        ? Number(env.COLUMNS)
+        : undefined
+}
+
 export function detectCliCapabilities({
     stdout = process.stdout,
     env = process.env,
@@ -63,13 +73,15 @@ export function detectCliCapabilities({
         !tty ||
         ci ||
         dumb
+    const columns = measuredColumns(stdout, env)
     return {
         ci,
         tty,
         dumb,
         color: !noColor,
         rich: tty && !ci && !dumb,
-        columns: Number.isFinite(stdout.columns) ? stdout.columns! : 0,
+        columns: columns ?? 0,
+        columnsKnown: columns !== undefined,
     }
 }
 
@@ -268,7 +280,14 @@ export function renderStatus({
     }
     const rows = statusRows(summaries, nativeName)
     const richEligible = capabilities.rich && capabilities.color
-    const barWidth = richEligible ? resolveSharedBarWidth(rows, capabilities.columns) : 0
+    // An unknown width is not a narrow one. Any guessed width would still hide the bars when the
+    // guess is too small for the longest row, so draw the preferred bar and let a narrow terminal
+    // wrap. A measured width keeps the fitted bar, or no bar when the minimum does not fit.
+    const barWidth = !richEligible
+        ? 0
+        : capabilities.columnsKnown
+          ? resolveSharedBarWidth(rows, capabilities.columns)
+          : PREFERRED_BAR_WIDTH
     const lines = rows.map((status) => {
         if (richEligible) {
             return renderRichRow(status.displayLabel, status, styles, barWidth)

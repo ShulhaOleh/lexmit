@@ -149,6 +149,7 @@ test('capabilities report context-free TTY, color, and column facts only', () =>
         color: true,
         rich: true,
         columns: 80,
+        columnsKnown: true,
     })
     assert.equal(detectCliCapabilities({ stdout: tty, env: { NO_COLOR: '' } }).color, false)
     assert.equal(
@@ -164,12 +165,30 @@ test('capabilities report context-free TTY, color, and column facts only', () =>
     assert.equal(detectCliCapabilities({ stdout: tty, env: { TERM: 'dumb' } }).rich, false)
     assert.equal(detectCliCapabilities({ stdout: {}, env: {} }).rich, false)
     assert.equal(detectCliCapabilities({ stdout: {}, env: {} }).columns, 0)
-    for (const columns of [undefined, Number.NaN, Number.POSITIVE_INFINITY]) {
-        assert.equal(
-            detectCliCapabilities({ stdout: { isTTY: true, columns }, env: {} }).columns,
-            0
-        )
+    assert.equal(detectCliCapabilities({ stdout: {}, env: {} }).columnsKnown, false)
+    for (const columns of [undefined, Number.NaN, Number.POSITIVE_INFINITY, 0]) {
+        const capabilities = detectCliCapabilities({ stdout: { isTTY: true, columns }, env: {} })
+        assert.equal(capabilities.columns, 0)
+        assert.equal(capabilities.columnsKnown, false)
     }
+})
+
+test('COLUMNS supplies the width only when stdout reports none', () => {
+    const unsized = { isTTY: true, columns: undefined }
+    const fromEnv = detectCliCapabilities({ stdout: unsized, env: { COLUMNS: '132' } })
+    assert.equal(fromEnv.columns, 132)
+    assert.equal(fromEnv.columnsKnown, true)
+    for (const COLUMNS of ['', '0', '-5', 'abc', '90.5', ' 90 ', '1e2', '0x5a', '+90', '090']) {
+        const capabilities = detectCliCapabilities({ stdout: unsized, env: { COLUMNS } })
+        assert.equal(capabilities.columns, 0, `COLUMNS=${COLUMNS}`)
+        assert.equal(capabilities.columnsKnown, false, `COLUMNS=${COLUMNS}`)
+    }
+    const measured = detectCliCapabilities({
+        stdout: { isTTY: true, columns: 120 },
+        env: { COLUMNS: '60' },
+    })
+    assert.equal(measured.columns, 120)
+    assert.equal(measured.columnsKnown, true)
 })
 
 test('status bars use exact deterministic 40-cell allocation and state order', () => {
@@ -550,7 +569,7 @@ test('rich bar boundaries retain styling and omit only the bar', () => {
         })
         assert.match(stream.value(), /\[32m/u)
     }
-    for (const columns of [59, undefined, Number.NaN, Number.POSITIVE_INFINITY]) {
+    for (const columns of [59]) {
         const stream = outputStream({ isTTY: true, columns })
         renderStatus({
             summaries: summary,
@@ -559,7 +578,84 @@ test('rich bar boundaries retain styling and omit only the bar', () => {
         })
         const plainText = stripAnsi(stream.value())
         assert.doesNotMatch(plainText, /[[\]?!]/u)
+        assert.doesNotMatch(plainText, /━/u)
         assert.match(plainText, /9 accepted, 1 missing/u)
+    }
+})
+
+// Shaped like Refract's status: the zh-CN row is 55 cells without its bar, so the 32-cell
+// minimum bar needs 88 columns.
+const longRowSummaries = buildStatusSummaries(
+    inspection(1274, [
+        locale('uk', { accepted: 965, missing: 309 }),
+        locale('zh-CN', { accepted: 965, missing: 309 }),
+    ])
+)
+const longRowNames: Record<string, string> = {
+    en: 'English',
+    uk: 'Українська',
+    'zh-CN': '中文（中国）',
+}
+
+function renderLongRowStatus(
+    stdout: Pick<CliOutput, 'isTTY' | 'columns'>,
+    env: NodeJS.ProcessEnv = {}
+) {
+    const stream = outputStream(stdout)
+    renderStatus({
+        summaries: longRowSummaries,
+        capabilities: detectCliCapabilities({ stdout: stream.stream, env }),
+        nativeName: (id) => longRowNames[id]!,
+        stdout: stream.stream,
+    })
+    return stream.value()
+}
+
+test('a TTY that reports no width draws the preferred 40-cell bar', () => {
+    for (const columns of [undefined, Number.NaN, Number.POSITIVE_INFINITY, 0]) {
+        const output = renderLongRowStatus({ isTTY: true, columns })
+        const lines = stripAnsi(output).trimEnd().split('\n')
+        assert.equal(lines.length, 3)
+        for (const line of lines) {
+            assert.match(line, /(?<!━)━{40} /u, `columns=${columns}`)
+        }
+        assert.match(
+            lines[2]!,
+            /^中文（中国） \(zh-CN\) ━{40} 75\.7% {4}965 accepted, 309 missing$/u
+        )
+    }
+})
+
+test('a measured width keeps fitting the bar, and COLUMNS counts as measured', () => {
+    // At 80 columns the minimum bar does not fit beside a 55-cell row, so the row has no bar.
+    for (const output of [
+        renderLongRowStatus({ isTTY: true, columns: 80 }),
+        renderLongRowStatus({ isTTY: true, columns: undefined }, { COLUMNS: '80' }),
+    ]) {
+        assert.match(output, /\u001b\[1m/u)
+        const text = stripAnsi(output)
+        assert.doesNotMatch(text, /━/u)
+        assert.match(text, /中文（中国） \(zh-CN\) 75\.7% {4}965 accepted, 309 missing/u)
+    }
+    assert.match(
+        stripAnsi(renderLongRowStatus({ isTTY: true, columns: 88 })),
+        /(?<!━)━{32} 75\.7%/u
+    )
+    assert.doesNotMatch(stripAnsi(renderLongRowStatus({ isTTY: true, columns: 87 })), /━/u)
+})
+
+test('piped output stays plain whether or not a width is known', () => {
+    for (const [stdout, env] of [
+        [{}, {}],
+        [{}, { COLUMNS: '200' }],
+        [{ isTTY: false, columns: 200 }, {}],
+    ] as const) {
+        assert.equal(
+            renderLongRowStatus(stdout, env),
+            'English (en): Complete; source=1274\n' +
+                'Українська (uk): 75.7%; 965 accepted, 309 missing\n' +
+                '中文（中国） (zh-CN): 75.7%; 965 accepted, 309 missing\n'
+        )
     }
 })
 
