@@ -1,0 +1,129 @@
+name: Translation status
+
+# Called from a project's own workflow, after locale or English changes reach its branch. It
+# writes the review markers, translator credits, README block and status SVGs, proves it changed
+# nothing else, and pushes one commit. It runs the published lexmit at the version the caller pins.
+on:
+    workflow_call:
+        inputs:
+            lexmit-version:
+                description: The lexmit version to run, for example 0.1.0.
+                required: true
+                type: string
+            branch:
+                description: The branch the writer reads and pushes to.
+                default: main
+                type: string
+        secrets:
+            push-key:
+                description: A deploy key, for a branch whose rules the workflow token cannot pass.
+                required: false
+
+# A cancelled run has published nothing: the push is the last step, and the run that survives
+# checks out the branch again and recomputes from the newest source change.
+concurrency:
+    group: translation-status-${{ github.repository }}
+    cancel-in-progress: true
+
+jobs:
+    publish:
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write
+        steps:
+            - uses: actions/checkout@v7
+              with:
+                  ref: ${{ inputs.branch }}
+                  fetch-depth: 0
+                  ssh-key: ${{ secrets.push-key }}
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 22
+
+            - name: Install lexmit
+              env:
+                  LEXMIT_VERSION: ${{ inputs.lexmit-version }}
+              run: npm install --global "lexmit@${LEXMIT_VERSION}"
+
+            - name: Synchronize, regenerate, verify and publish
+              env:
+                  GITHUB_TOKEN: ${{ github.token }}
+                  BRANCH: ${{ inputs.branch }}
+              run: |
+                  set -euo pipefail
+
+                  git config user.name "github-actions[bot]"
+                  git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+                  # The files the writer owns, read from the config so nothing else is ever staged.
+                  mapfile -t OWNED < <(node -e '
+                    const c = JSON.parse(require("fs").readFileSync("lexmit.config.json", "utf8"))
+                    for (const path of [c.readme, c.contributorsFile, c.statusAssetDir, c.localeDir]) console.log(path)
+                  ')
+
+                  # A rejected push is the one recoverable outcome and is the only thing that
+                  # returns non-zero below. Everything else exits the job, because errexit does
+                  # not apply inside a function called as an "if" condition and a validation
+                  # failure must never be mistaken for a race worth retrying.
+                  must() {
+                    "$@" || { echo "::error::lexmit writer step failed: $*"; exit 1; }
+                  }
+
+                  attempt_publish() {
+                    must git fetch origin "$BRANCH"
+                    must git reset --hard "origin/$BRANCH"
+                    BASE="$(git rev-parse HEAD)"
+                    echo "Base revision: $BASE"
+
+                    # The source commit has to be valid on its own before anything is written.
+                    must lexmit verify
+
+                    must lexmit sync
+                    must lexmit contributors
+                    must lexmit presentation --write
+
+                    # Strict now: after the writer has run, stale derived state is a real failure.
+                    must lexmit verify --synchronized
+                    must lexmit presentation --check
+
+                    # A second pass must find nothing left to do, or the generators disagree
+                    # with each other and the result is not a fixed point.
+                    must lexmit tree-state > /tmp/lexmit-pass-one.txt
+                    must lexmit sync
+                    must lexmit presentation --write
+                    must lexmit tree-state > /tmp/lexmit-pass-two.txt
+                    must diff /tmp/lexmit-pass-one.txt /tmp/lexmit-pass-two.txt
+
+                    # Exactly which paths changed, and that no translation was touched.
+                    must lexmit guard "$BASE"
+
+                    # Stage the owned paths by name as well: anything else the runner somehow
+                    # produced stays out of the commit even though the guard above passed.
+                    must git add -- "${OWNED[@]}"
+                    if git diff --cached --quiet; then
+                      echo "Derived translation state is already current."
+                      return 0
+                    fi
+                    must git commit -m "docs: update translation status"
+
+                    # Never force: a translator who pushed while this ran keeps their commit,
+                    # and the next attempt recomputes on top of it.
+                    if git push origin "HEAD:$BRANCH"; then
+                      return 0
+                    fi
+                    echo "$BRANCH advanced during this run; recomputing from a fresh checkout."
+                    return 1
+                  }
+
+                  for attempt in 1 2 3; do
+                    echo "::group::Attempt $attempt"
+                    if attempt_publish; then
+                      echo "::endgroup::"
+                      exit 0
+                    fi
+                    echo "::endgroup::"
+                  done
+
+                  echo "$BRANCH kept advancing; leaving the next run to publish."
+                  exit 1

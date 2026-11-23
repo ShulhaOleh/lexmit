@@ -1,0 +1,140 @@
+# Translation ownership
+
+lexmit reconstructs translation state from Git history. This page says who is allowed to
+change what, and which check enforces which half of that.
+
+## The three states
+
+Every key, in every non-English locale, is in exactly one state. The state is derived from
+history, not read off whichever marker the file currently holds.
+
+| State    | Meaning                                                           | Stored form                                              |
+| -------- | ----------------------------------------------------------------- | -------------------------------------------------------- |
+| Accepted | Acceptance is proven for this target and current English          | the translation, unmarked                                |
+| Review   | A target exists, but acceptance for current English is not proven | `? <translation>`, or still unmarked before the bot runs |
+| Missing  | There is no usable target                                         | absent, or `! <English>`                                 |
+
+A translation whose English changed is in Review the moment the English commit lands, whether or
+not its `? ` has been written yet. The English source file is the only file a product change has
+to touch, so a marker is always written later, by the bot, in a separate commit. Code that reads
+state from the stored marker would call that entry Accepted and would be wrong.
+`summarizeHistory` in `src/history.mts` exposes this as `effectiveState`, and it is the one
+interpretation the validators, the synchronizer, the review command and the CLI summaries all
+read.
+
+Missing is not Review. An English scaffold is not an accepted translation. A translation that
+happens to match some historical value is not evidence that anyone reviewed the current meaning.
+
+## Who owns what
+
+| Actor                | Owns                                                                            | Must not do                                                   |
+| -------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| Product contributor  | English source strings                                                          | Translate or backfill other locales as incidental work        |
+| Language contributor | Translated text, and explicit Keep/Edit review decisions                        | Be required to regenerate status images to pass CI            |
+| CI                   | Whether the tree is valid translation data                                      | Reject a tree only because derived output is stale            |
+| Bot                  | `!` and `?` markers, contributor attribution, the README block, the status SVGs | Invent translations, change payloads, or accept a new meaning |
+
+## Which check asks which question
+
+Two different questions, deliberately separated. Conflating them would force a contributor to
+commit the bot's future output.
+
+| Question                                      | Command                        | Who runs it         |
+| --------------------------------------------- | ------------------------------ | ------------------- |
+| Is this valid translation data?               | `lexmit verify`                | CI, on every push   |
+| Same, restricted to the staged files          | `lexmit verify --staged`       | the pre-commit hook |
+| Structural validation plus effective coverage | `lexmit check`                 | CI and contributors |
+| Have the locale markers caught up?            | `lexmit verify --synchronized` | the bot only        |
+| Have the README and SVGs caught up?           | `lexmit presentation --check`  | the bot only        |
+
+The validity checks pass for a new English key with no translation, for changed English over an
+unchanged translation, and for a scaffold quoting superseded English. They fail for a translation
+whose `{placeholders}` disagree with English that has not changed, an unknown key holding real
+translated text, invalid marker syntax, empty values, and unsafe Unicode.
+
+When Git history is unavailable, a check that needs it reports what it could not determine and
+exits non-zero. It never assumes the tree is fine. `lexmit fill` deliberately needs no history
+and stays usable in a shallow clone; it writes English scaffolds and never decides acceptance.
+
+## Acceptance has to exist in Git
+
+`lexmit review` lists every entry that is effectively Review, including those whose `?` the
+bot has not written yet, and it refuses any decision that would leave no trace. Keeping a
+translation writes back the text that is already there, so it is only a real acceptance when the
+committed file holds the `?` marker that the write removes. An Edit that retypes the committed
+text is refused for the same reason.
+
+Both checks compare against the committed tree, never the working tree: a marker that sync wrote
+but nobody committed produces an empty diff, so removing it would record nothing while the
+command reported a successful Keep. When Keep is unavailable, run `lexmit sync`, commit the
+marker, and review again — or Edit, which writes new text and needs no marker first.
+
+A Review whose placeholders no longer match English can still be reviewed. Only Keep is
+unavailable there, because keeping text the runtime already replaces with English would accept a
+translation nobody can see.
+
+## Why history replay tolerates stale scaffolds
+
+Between an English commit and the bot's next run, every intermediate revision holds scaffolds
+quoting superseded English. History replay walks every revision from the audited baseline, so
+rejecting that drift would let a single ordinary commit break every later analysis permanently.
+`analyzeCommittedHistory` therefore does not check scaffold freshness. Malformed markers,
+a `? ` marker without accepted lineage, and a missing or non-ancestor baseline still fail closed.
+
+## Unreadable historical evidence
+
+Intermediate JSON or UTF-8 corruption is recorded as a scoped evidence gap. Readable English
+and other locales still replay. A corrupt source affects every dependent target, while a
+corrupt target affects only that locale. Baseline, latest and candidate revisions must be
+readable within the command's scope.
+
+A gap never creates acceptance or an automatic review-marker request. Acceptance proven
+before the gap still stands. A present target with unproven acceptance is Review,
+with incomplete evidence reported separately. History-dependent validation and marker planning
+fail before writing when a usable target still depends on that evidence. Absence and scaffolds
+remain Missing.
+
+Malformed historical files are never repaired in code. Once a fix lands, the baseline may move
+to the fixing commit if replay from there yields the same effective state for every entry.
+Otherwise the affected targets stay Review until they are accepted again.
+
+An observable Edit against readable English or removal of a committed explicit review marker can
+prove fresh acceptance. Identical text on both sides of the gap, or English returning to an
+earlier wording, does not close it on its own. Review can offer an Edit, but keeping already
+committed plain text records no decision. An explicit review marker must be committed before
+Keep can remove it.
+
+`lexmit check <locale>` applies the same semantic rules as the default check to English and
+the selected locale. Unrelated corrupt locales do not block it. `lexmit status` remains
+structural and Git-independent. Its counts describe stored markers, not proven acceptance.
+
+## What the writer checks before it commits
+
+A push made with `GITHUB_TOKEN` starts no workflow run, so the bot's commit may get no CI. A
+push made with `push-key` does start one, but only after the commit is on the branch. Everything
+the commit is checked against therefore happens inside the reusable
+`.github/workflows/translation-status.yml`, before the push:
+
+1. the source commit is valid on its own, before anything is written
+2. synchronize markers, regenerate contributors, README and SVGs
+3. strict marker and presentation freshness against the regenerated tree
+4. a second generation pass produces no further change
+5. `lexmit guard` proves only allowed paths changed and no translated text was
+   created, rewritten or deleted
+6. stage the owned paths by name, commit, and push without force
+
+If the branch advanced while the run was working, the push is rejected, the generated work is
+thrown away in the disposable runner, and the run recomputes from a fresh checkout, bounded to
+three attempts. A translator's commit is never overwritten and history is never force-pushed.
+
+## Runtime is unaffected
+
+`resolveTargetValue`, exported from `lexmit/runtime`, is the whole runtime rule:
+
+- absent or `! ` target: render current English
+- Accepted or `? ` target whose placeholders match English: render the target, without the marker
+- either, with placeholders that do not match: render current English
+
+Review does not mean "display English". An app that bundles its locales at build time has no Git
+on the user's machine, so nothing in this document reaches the running app: a build made before
+the bot synchronizes renders exactly what a build made after it renders.
