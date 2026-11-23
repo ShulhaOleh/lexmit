@@ -27,8 +27,10 @@ checks that it changed nothing else before it commits.
 ## Install
 
 ```sh
-npm install --save-dev lexmit
+npm install --save-dev @shulha/lexmit
 ```
+
+The command it installs is `lexmit`.
 
 ## Configure
 
@@ -71,7 +73,7 @@ The table uses three legend images. Copy them once into a `legend` folder inside
 
 ```sh
 mkdir -p assets/i18n/status/legend
-cp node_modules/lexmit/assets/legend/*.svg assets/i18n/status/legend/
+cp node_modules/@shulha/lexmit/assets/legend/*.svg assets/i18n/status/legend/
 ```
 
 ## Commands
@@ -98,7 +100,7 @@ Locale files keep the markers in the text, so resolve each string before showing
 helper falls back to English for anything missing, marked or with mismatched placeholders:
 
 ```ts
-import { parseSourceValue, parseTargetValue, resolveTargetValue } from 'lexmit/runtime'
+import { parseSourceValue, parseTargetValue, resolveTargetValue } from '@shulha/lexmit/runtime'
 
 const text = resolveTargetValue(parseSourceValue(englishText), parseTargetValue(translatedText))
 ```

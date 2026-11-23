@@ -129,7 +129,7 @@ three attempts. A translator's commit is never overwritten and history is never 
 
 ## Runtime is unaffected
 
-`resolveTargetValue`, exported from `lexmit/runtime`, is the whole runtime rule:
+`resolveTargetValue`, exported from `@shulha/lexmit/runtime`, is the whole runtime rule:
 
 - absent or `! ` target: render current English
 - Accepted or `? ` target whose placeholders match English: render the target, without the marker

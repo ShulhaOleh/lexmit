@@ -1,5 +1,5 @@
 {
-    "name": "lexmit",
+    "name": "@shulha/lexmit",
     "version": "0.1.0",
     "description": "Translation status for JSON locale files, reconstructed from Git history",
     "license": "MIT",
@@ -10,11 +10,14 @@
     },
     "type": "module",
     "packageManager": "bun@1.4.5",
+    "publishConfig": {
+        "access": "public"
+    },
     "engines": {
         "node": ">=22"
     },
     "bin": {
-        "lexmit": "./dist/cli.mjs"
+        "lexmit": "dist/cli.mjs"
     },
     "exports": {
         "./runtime": {

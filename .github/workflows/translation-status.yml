@@ -44,7 +44,7 @@ jobs:
             - name: Install lexmit
               env:
                   LEXMIT_VERSION: ${{ inputs.lexmit-version }}
-              run: npm install --global "lexmit@${LEXMIT_VERSION}"
+              run: npm install --global "@shulha/lexmit@${LEXMIT_VERSION}"
 
             - name: Synchronize, regenerate, verify and publish
               env:
