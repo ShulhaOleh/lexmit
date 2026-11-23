@@ -107,6 +107,17 @@ const text = resolveTargetValue(parseSourceValue(englishText), parseTargetValue(
 
 `translatedText` may be `undefined` for a key the language does not have yet.
 
+Use the same entry point for the labels in a language picker:
+
+```ts
+import { localeEnglishName, localeNativeName } from '@shulha/lexmit/runtime'
+
+localeNativeName('zh-CN') // '简体中文'
+localeEnglishName('zh-CN') // 'Simplified Chinese'
+```
+
+Both return the tag unchanged when the platform has no name for it.
+
 ## In CI
 
 Check every push with full history:

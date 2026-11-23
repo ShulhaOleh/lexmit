@@ -121,3 +121,49 @@ export function usableTargetText(
 export function resolveTargetValue(sourceValue: SourceValue, targetValue: TargetValue): string {
     return usableTargetText(sourceValue, targetValue) ?? sourceValue.sourceText
 }
+
+// A tag with a region but no script names the region, so zh-CN reads "Chinese (China)" where
+// people expect "Simplified Chinese". The dialect form of language-script differs from the
+// standard form only when the locale data has a dedicated name for that pair. Comparing the two
+// asks the data itself instead of parsing parentheses that vary between ICU versions.
+function languageName(localeId: string, displayLocale: string): string {
+    try {
+        const dialect = new Intl.DisplayNames([displayLocale], {
+            type: 'language',
+            languageDisplay: 'dialect',
+            fallback: 'none',
+        })
+        const locale = new Intl.Locale(localeId)
+        let name: string | undefined
+        if (locale.region && !locale.script) {
+            const script = locale.maximize().script
+            if (script) {
+                const languageScript = `${locale.language}-${script}`
+                const standard = new Intl.DisplayNames([displayLocale], {
+                    type: 'language',
+                    languageDisplay: 'standard',
+                    fallback: 'none',
+                })
+                const scriptName = dialect.of(languageScript)
+                if (scriptName && scriptName !== standard.of(languageScript)) name = scriptName
+            }
+        }
+        name ??= dialect.of(localeId)
+        if (!name || name === localeId) return localeId
+        // A language picker shows each name as a label, but engines disagree on whether a
+        // language's own name starts with a capital.
+        return name.charAt(0).toLocaleUpperCase(displayLocale) + name.slice(1)
+    } catch {
+        // A missing name must never break a page or a command. The tag still identifies the
+        // language.
+        return localeId
+    }
+}
+
+export function localeNativeName(localeId: string): string {
+    return languageName(localeId, localeId)
+}
+
+export function localeEnglishName(localeId: string): string {
+    return languageName(localeId, 'en')
+}

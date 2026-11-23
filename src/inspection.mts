@@ -10,6 +10,8 @@ import {
 } from './current.mts'
 import { errorMessage } from './io.mts'
 
+export { localeEnglishName, localeNativeName } from './runtime.mts'
+
 export const SOURCE_LOCALE = 'en'
 const UTF8_DECODER = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
 
@@ -35,18 +37,6 @@ export function validateLocaleId(id: string) {
             `Locale filename '${id}.json' must use canonical casing '${canonical}.json'`
         )
     }
-}
-
-export function localeNativeName(localeId: string) {
-    const name = new Intl.DisplayNames([localeId], { type: 'language' }).of(localeId)
-    if (!name) throw new Error(`Intl.DisplayNames could not name locale '${localeId}'`)
-    return name.charAt(0).toLocaleUpperCase(localeId) + name.slice(1)
-}
-
-export function localeEnglishName(localeId: string) {
-    const name = new Intl.DisplayNames(['en'], { type: 'language' }).of(localeId)
-    if (!name) throw new Error(`Intl.DisplayNames could not name locale '${localeId}' in English`)
-    return name.charAt(0).toUpperCase() + name.slice(1)
 }
 
 export function inspectLocales(i18nDir = lexmitConfig().i18nDir, localeId?: string) {
