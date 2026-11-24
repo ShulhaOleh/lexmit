@@ -47,6 +47,14 @@ test('the writer stages only the paths its config names and never forces a push'
     assert.match(workflow, /docs: update translation status/u)
 })
 
+test('the bot installs the exact lexmit version the caller pins in its package.json', () => {
+    assert.match(workflow, /package-json:\n\s+description: [^\n]+\n\s+default: package\.json\n/u)
+    assert.doesNotMatch(workflow, /lexmit-version/u)
+    assert.match(workflow, /PACKAGE_JSON: \$\{\{ inputs\.package-json \}\}/u)
+    assert.match(workflow, /must pin @shulha\/lexmit to an exact version/u)
+    assert.match(workflow, /npm install --global "@shulha\/lexmit@\$VERSION"/u)
+})
+
 test('caller inputs reach the shell only through environment variables', () => {
     for (const line of workflow.split('\n')) {
         if (!line.includes('${{ inputs.')) continue
