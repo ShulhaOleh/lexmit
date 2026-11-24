@@ -7,15 +7,28 @@ GitHub Release notes, so entries are written for someone upgrading.
 
 ### Breaking
 
-- The translation status workflow installs the exact `@shulha/lexmit` version pinned in your
-  `package.json` and no longer takes a `lexmit-version` input. Remove that input, pin the package
-  to an exact version, and pass `package-json` if that file is not at the repository root. From
-  here on, the workflow tag only has to change when a release lists a workflow change.
+- The status workflow installs the exact version pinned in package.json instead of taking a lexmit-version input.
+
+### Added
+
+- Added localeNativeName and localeEnglishName to the runtime.
+- Added a maintainers setting for a maintainer's other accounts.
+- Added the baseline commit to verify and status output.
+
+### Changed
+
+- historyBaseline is now optional and defaults to the commit that added the config.
+- Region tags are now named by script, so zh-CN reads Simplified Chinese.
+- Translator credits no longer count values copied from English.
+
+### Fixed
+
+- Fixed missing coverage bars when the terminal reports no width.
+- Fixed contributors failing on history from before adopting lexmit.
 
 ### Security
 
-- The translation status workflow pins the actions it runs to exact commits, so a moved tag in
-  one of them cannot change what runs with your push key.
+- The status workflow pins its actions to exact commits.
 
 ## 0.1.0
 
