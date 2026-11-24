@@ -27,7 +27,7 @@ checks that it changed nothing else before it commits.
 ## Install
 
 ```sh
-npm install --save-dev @shulha/lexmit
+npm install --save-dev --save-exact @shulha/lexmit
 ```
 
 The command it installs is `lexmit`.
@@ -162,7 +162,11 @@ shallow clone it stops rather than pick the wrong commit:
 
 ## The translation status bot
 
-Call the reusable workflow from your repository. Pin the same version in both places:
+Call the reusable workflow from your repository, at the tag of the version you installed. It
+runs the exact `@shulha/lexmit` version your `package.json` pins, so the bot and your local
+commands always agree. A version range is refused. Because the version comes from
+`package.json`, the tag only has to change when the [changelog](CHANGELOG.md) lists a change to
+the workflow.
 
 ```yaml
 name: Translation status
@@ -177,15 +181,14 @@ on:
 
 jobs:
     status:
-        uses: ShulhaOleh/lexmit/.github/workflows/translation-status.yml@v0.1.0
+        uses: ShulhaOleh/lexmit/.github/workflows/translation-status.yml@v0.2.0
         permissions:
             contents: write
-        with:
-            lexmit-version: 0.1.0
 ```
 
-If your branch rules stop the workflow token from pushing, add a deploy key with write access as
-a secret and pass it as `push-key`.
+If the `package.json` that pins lexmit is not at the repository root, pass its path as
+`package-json`. If your branch rules stop the workflow token from pushing, add a deploy key with
+write access as a secret and pass it as `push-key`.
 
 ## How it works
 
