@@ -1,0 +1,145 @@
+name: Release
+
+on:
+    push:
+        tags: ['v*']
+
+permissions:
+    contents: read
+
+jobs:
+    validate:
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            actions: read
+        outputs:
+            version: ${{ steps.tag.outputs.version }}
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  fetch-depth: 0
+
+            - name: Validate the tag
+              id: tag
+              run: |
+                  set -euo pipefail
+
+                  if [ "$(git cat-file -t "refs/tags/$GITHUB_REF_NAME")" != 'tag' ]; then
+                    echo "::error::$GITHUB_REF_NAME must be an annotated tag"
+                    exit 1
+                  fi
+
+                  TAG_COMMIT=$(git rev-parse "refs/tags/$GITHUB_REF_NAME^{}")
+                  if [ "$TAG_COMMIT" != "$(git rev-parse HEAD)" ]; then
+                    echo "::error::$GITHUB_REF_NAME does not point at the checked-out commit"
+                    exit 1
+                  fi
+
+                  git fetch --no-tags origin main
+                  if ! git merge-base --is-ancestor "$TAG_COMMIT" FETCH_HEAD; then
+                    echo "::error::$GITHUB_REF_NAME is not reachable from main"
+                    exit 1
+                  fi
+
+                  VERSION=$(node -p "require('./package.json').version")
+                  if [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
+                    echo "::error::$GITHUB_REF_NAME does not match package.json version $VERSION"
+                    exit 1
+                  fi
+
+                  if ! grep -qx "## $VERSION" CHANGELOG.md; then
+                    echo "::error::CHANGELOG.md has no section for $VERSION"
+                    exit 1
+                  fi
+                  echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+            # The release commit is on main, so CI has already tested it. Waiting for that run
+            # instead of testing again keeps one definition of passing.
+            - name: Wait for CI on the tagged commit
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                  set -euo pipefail
+
+                  TAG_COMMIT=$(git rev-parse HEAD)
+                  RUNS_URL="/repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$TAG_COMMIT&event=push&per_page=1"
+                  for ATTEMPT in {1..120}; do
+                    CI_STATE=$(gh api "$RUNS_URL" --jq 'if .total_count == 0 then ["missing", "pending"] else [.workflow_runs[0].status, (.workflow_runs[0].conclusion // "pending")] end | @tsv')
+                    read -r CI_STATUS CI_CONCLUSION <<< "$CI_STATE"
+
+                    if [ "$CI_STATUS" = 'completed' ] && [ "$CI_CONCLUSION" = 'success' ]; then
+                      echo "CI passed for $TAG_COMMIT"
+                      exit 0
+                    fi
+                    if [ "$CI_STATUS" = 'completed' ]; then
+                      echo "::error::CI finished with conclusion: $CI_CONCLUSION"
+                      exit 1
+                    fi
+
+                    echo "Waiting for CI on $TAG_COMMIT ($CI_STATUS)"
+                    sleep 10
+                  done
+                  echo "::error::Timed out waiting for CI on $TAG_COMMIT"
+                  exit 1
+
+    publish:
+        needs: validate
+        runs-on: ubuntu-latest
+        # The wait timer is the last chance to cancel a release, and npm's trusted publisher
+        # accepts only this environment.
+        environment: release
+        permissions:
+            contents: write
+            id-token: write
+        env:
+            VERSION: ${{ needs.validate.outputs.version }}
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+            - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+              with:
+                  bun-version-file: package.json
+
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: 24
+                  registry-url: https://registry.npmjs.org
+
+            # Trusted publishing needs npm 11.5.1 or newer, which a runner's Node may not ship.
+            - run: npm install --global npm@11
+
+            - run: bun install --frozen-lockfile
+            - run: bun run build
+
+            # Installs the packed tarball the way a user would, so a file missing from the
+            # package fails here instead of in a published version, which can never be replaced.
+            - name: Test the packed tarball
+              run: |
+                  set -euo pipefail
+
+                  TARBALL="$GITHUB_WORKSPACE/$(npm pack --ignore-scripts --silent)"
+                  cd "$(mktemp -d)"
+                  npm init --yes > /dev/null
+                  npm install --no-audit --no-fund "$TARBALL"
+                  npx --no-install lexmit help > /dev/null
+                  node --input-type=module -e "
+                    import { parseSourceValue, parseTargetValue, resolveTargetValue } from '@shulha/lexmit/runtime'
+                    if (resolveTargetValue(parseSourceValue('Play'), parseTargetValue('! Play')) !== 'Play') process.exit(1)
+                  "
+
+            - name: Draft the GitHub Release
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                  awk -v heading="## $VERSION" '$0 == heading { found = 1; next } /^## / { if (found) exit } found' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+                  gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md"
+
+            # Publishes the files the tarball test just installed. Provenance is attached
+            # automatically because the trusted publisher identifies this workflow.
+            - run: npm publish --ignore-scripts --provenance
+
+            - name: Publish the GitHub Release
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: gh release edit "$GITHUB_REF_NAME" --draft=false
