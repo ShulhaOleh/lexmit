@@ -192,6 +192,10 @@ a secret and pass it as `push-key`.
 [docs/ownership.md](docs/ownership.md) explains who may change what, which check answers which
 question, and why acceptance has to be recorded in Git.
 
+## Changes
+
+Each version's changes are listed in [CHANGELOG.md](CHANGELOG.md).
+
 ## Origin
 
 lexmit was extracted from [Modrex](https://github.com/modrexio/modrex), where it manages the app's

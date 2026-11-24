@@ -34,7 +34,8 @@
         "build": "tsc src/cli.mts src/runtime.mts --ignoreConfig --noCheck --outDir dist --rootDir src --module nodenext --target es2022 --declaration --rewriteRelativeImportExtensions --allowImportingTsExtensions",
         "fmt": "bun fmt --no-script --no-config --no-semi --single-quote --tab-width=4 --trailing-comma=es5 --print-width=100",
         "test": "bun test --timeout 60000",
-        "test:node": "node --test \"src/*.test.mts\"",
+        "test:node": "node --test \"src/*.test.mts\" \"scripts/*.test.mts\"",
+        "release": "bun scripts/release.mts",
         "prepublishOnly": "bun run build"
     },
     "devDependencies": {

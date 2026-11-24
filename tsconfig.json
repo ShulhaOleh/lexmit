@@ -15,5 +15,5 @@
         "noUnusedLocals": true,
         "noUnusedParameters": true
     },
-    "include": ["src/*.mts", "src/fixtures/*.mts"]
+    "include": ["src/*.mts", "src/fixtures/*.mts", "scripts/*.mts"]
 }
