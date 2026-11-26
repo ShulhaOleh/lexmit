@@ -5,6 +5,8 @@ GitHub Release notes, so entries are written for someone upgrading.
 
 ## Unreleased
 
+## 0.2.0
+
 ### Breaking
 
 - The status workflow installs the exact version pinned in package.json instead of taking a lexmit-version input.

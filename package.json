@@ -1,6 +1,6 @@
 {
     "name": "@shulha/lexmit",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "description": "Translation status for JSON locale files, reconstructed from Git history",
     "license": "MIT",
     "author": "Oleh Shulha",
