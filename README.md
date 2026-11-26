@@ -15,6 +15,30 @@ Developers only ever edit the English file. A bot writes the `!` and `?` markers
 translator credits, a status table in your README and one status image per language, then
 checks that it changed nothing else before it commits.
 
+## Used by
+
+<p align="center">
+  <a href="https://github.com/RefractMC/Refract_MC">
+    <img src="https://raw.githubusercontent.com/RefractMC/Refract_MC/main/logo/refract-iris-256.png" alt="Refract" height="96" />
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/RefractMC/Refract_MC"><strong>Refract</strong></a>, a fast, open-source Minecraft launcher
+</p>
+
+<br/>
+
+<p align="center">
+  <a href="https://github.com/modrexio/modrex">
+    <img src="https://raw.githubusercontent.com/modrexio/modrex/main/assets/icon.png" alt="Modrex" height="96" />
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/modrexio/modrex"><strong>Modrex</strong></a>, a mod manager that installs game mods without opening the game folder
+</p>
+
 ## Requirements
 
 - Node.js 22 or newer, or Bun
