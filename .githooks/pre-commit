@@ -1,0 +1,19 @@
+#!/bin/sh
+set -eu
+
+if ! command -v bun >/dev/null 2>&1; then
+    printf '%s\n' 'Lexmit pre-commit needs Bun on PATH to check formatting.' >&2
+    exit 1
+fi
+
+snapshot=$(mktemp -d /tmp/lexmit-format.XXXXXXXX)
+trap 'rm -rf -- "$snapshot"' 0
+trap 'exit 1' HUP INT TERM
+
+# Let Git select the index, including the temporary index used by git commit --only.
+git checkout-index --all --ignore-skip-worktree-bits --prefix="$snapshot/"
+
+if ! (cd "$snapshot" && bun run fmt --check); then
+    printf '%s\n' 'Lexmit formatting check failed. Run bun run fmt and stage the intended changes.' >&2
+    exit 1
+fi

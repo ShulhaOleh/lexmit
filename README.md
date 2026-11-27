@@ -231,6 +231,14 @@ question, and why acceptance has to be recorded in Git.
 
 Each version's changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
+## Contributing
+
+Run `bun install` in your Lexmit checkout to install development dependencies and enable
+`.githooks`. Hook setup skips checkouts that already use custom Git hooks.
+
+Before each commit, the hook runs `bun run fmt --check` on the staged files. If the check
+fails, run `bun run fmt` and stage the changes you want to commit.
+
 ## Origin
 
 lexmit was extracted from [Modrex](https://github.com/modrexio/modrex), where it manages the app's

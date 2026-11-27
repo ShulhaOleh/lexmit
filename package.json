@@ -36,6 +36,7 @@
         "test": "bun test --timeout 60000",
         "test:node": "node --test \"src/*.test.mts\" \"scripts/*.test.mts\"",
         "release": "bun scripts/release.mts",
+        "prepare": "bun scripts/install-hooks.mts",
         "prepublishOnly": "bun run build"
     },
     "devDependencies": {
