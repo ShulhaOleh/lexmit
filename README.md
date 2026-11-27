@@ -2,18 +2,18 @@
 
 Translation status for JSON locale files, reconstructed from Git history.
 
-lexmit tracks every string of every language in one of three states, and it works them out
-from your commits rather than trusting whatever a file currently says:
+lexmit uses your commits to track each English key in each target language.
 
-| State    | Meaning                                               | How it is stored                |
-| -------- | ----------------------------------------------------- | ------------------------------- |
+| State    | Meaning                                               | How it is stored                 |
+| -------- | ----------------------------------------------------- | -------------------------------- |
 | Accepted | Translated, and accepted for the current English      | the translation                 |
-| Review   | Translated, but English changed since it was accepted | `? ` before the translation     |
+| Review   | A translation exists and needs review                 | `? ` before the translation after sync |
 | Missing  | Not translated yet                                    | absent, or `! ` and the English |
 
-Developers only ever edit the English file. A bot writes the `!` and `?` markers, the
-translator credits, a status table in your README and one status image per language, then
-checks that it changed nothing else before it commits.
+Developers can change English without editing the other locale files. A bot writes the `!` and
+`?` markers, the translator credits, a status table in your README and one status image per
+language. It checks that it changed only the files it owns and preserved translated text before
+it commits.
 
 ## Used by
 
@@ -43,8 +43,9 @@ checks that it changed nothing else before it commits.
 
 - Node.js 22 or newer, or Bun
 - A Git repository with full history in CI (`fetch-depth: 0`)
-- Locale files as one JSON file per language, named by language tag (`en.json`, `de.json`,
-  `zh-CN.json`), with English as the source. Keys may nest. Every value must be a string.
+- Locale files as one JSON file per language, named by canonical language tag (`en.json`,
+  `de.json`, `zh-CN.json`), with `en.json` as the source. Keys may nest. Every leaf value must
+  be a non-empty string.
 - LF line endings in checkouts, set with `* text=auto eol=lf` in `.gitattributes`, if anyone
   runs lexmit on Windows
 
@@ -73,7 +74,7 @@ and uses forward slashes.
 
 | Field              | What it is                                               |
 | ------------------ | -------------------------------------------------------- |
-| `historyBaseline`  | Optional. Full id of the commit that history starts from |
+| `historyBaseline`  | Optional. Full 40-character commit ID to start replay from |
 | `localeDir`        | The folder holding `en.json` and the other languages     |
 | `readme`           | The file that gets the status table                      |
 | `statusAssetDir`   | Where the per-language status images are written         |
@@ -81,15 +82,14 @@ and uses forward slashes.
 | `translationGuide` | The guide the status table links translators to          |
 | `maintainers`      | Optional GitHub logins treated like repository admins    |
 
-History replay starts at a baseline commit, and every unmarked translation in that commit counts
-as Accepted. Without `historyBaseline`, the baseline is the commit that added
-`lexmit.config.json`. Git finds that commit again after a squash merge, a merge commit or a
-rebase merge, so nothing needs updating once the pull request lands. Set `historyBaseline` only
-to start history somewhere else. `lexmit verify` and `lexmit status` print the baseline in use.
+History replay starts at a baseline commit, where each valid, unmarked translation counts as
+Accepted. Without `historyBaseline`, lexmit finds the most recent commit on the branch's
+first-parent history that added `lexmit.config.json`. That works after a squash merge, a merge
+commit or a rebase merge. If you set `historyBaseline`, use a commit on that first-parent history.
+`lexmit verify` and `lexmit status` print the baseline when they can resolve it.
 
-The locale files at the baseline have to be valid. To adopt lexmit, fix any check errors and add
-the config in the same pull request as the locale fixes, no earlier than the commit that fixes
-them.
+To adopt lexmit, fix any locale errors before or in the commit that adds the config. That commit
+becomes the baseline, so later fixes do not change the starting snapshot.
 
 `maintainers` lists GitHub logins treated as maintainers in addition to repository admins, for
 example a maintainer's second account. Maintainers are credited only for languages they created.
@@ -104,12 +104,16 @@ Mark where the status table goes in your README:
 ```
 
 The table uses three legend images. Copy them once into a `legend` folder inside your
-`statusAssetDir`:
+`statusAssetDir`. Lexmit manages the SVG files directly inside `statusAssetDir` and removes any
+that no longer correspond to a locale.
 
 ```sh
 mkdir -p assets/i18n/status/legend
 cp node_modules/@shulha/lexmit/assets/legend/*.svg assets/i18n/status/legend/
 ```
+
+For a local `lexmit presentation` run before the bot has generated contributor credits, create
+the configured `contributorsFile` with `{}`.
 
 ## Commands
 
@@ -117,13 +121,13 @@ cp node_modules/@shulha/lexmit/assets/legend/*.svg assets/i18n/status/legend/
 | ----------------------------- | ------------------------------------------------------ |
 | `lexmit help`                 | Show the translator workflow                           |
 | `lexmit status`               | Coverage for every language, from the stored markers   |
-| `lexmit check [locale]`       | Validate English or one language                       |
+| `lexmit check [locale]`       | Validate all locales, or English and the named locale  |
 | `lexmit missing <locale>`     | List missing keys with their English text              |
 | `lexmit create <locale>`      | Start a new language filled with marked English        |
-| `lexmit fill <locale>`        | Add marked English for keys a language is missing      |
+| `lexmit fill <locale>`        | Add, refresh or remove `! ` scaffolds for one locale  |
 | `lexmit translate <locale>`   | Translate a language interactively                     |
-| `lexmit review <locale>`      | Keep or edit translations whose English changed        |
-| `lexmit sync`                 | Write the `!` and `?` markers                          |
+| `lexmit review <locale>`      | Keep or edit translations that need review              |
+| `lexmit sync`                 | Reconcile markers and locale structure across languages |
 | `lexmit verify`               | Check translation data against Git history, for CI     |
 | `lexmit verify --staged`      | The same check for staged files, for a pre-commit hook |
 | `lexmit presentation --check` | Check that the README table and images are current     |
@@ -131,23 +135,24 @@ cp node_modules/@shulha/lexmit/assets/legend/*.svg assets/i18n/status/legend/
 
 ## Terminal output
 
-`lexmit status` draws a coverage bar for each language only when it writes to a terminal. Piped or
-redirected output is one plain line per language. The bar shrinks from 40 cells to 32 to fit the
-terminal, and a terminal too narrow for a 32-cell bar gets rows without bars. When the terminal does
-not report its width, lexmit reads `COLUMNS`, and when that is not set either, it draws the 40-cell
-bar. Set `COLUMNS` to pass the width yourself:
+`lexmit status` prints a baseline line followed by coverage for each locale. Piped or redirected
+output uses plain text. In a color terminal the bar uses up to 40 cells. If fewer than 32 cells
+fit beside the longest row, lexmit omits the bars. When the terminal reports no width, lexmit uses
+`COLUMNS` if it contains a positive integer with no leading zeroes. If the width is still unknown,
+lexmit draws the 40-cell bar.
 
 ```sh
 COLUMNS=120 lexmit status
 ```
 
-`NO_COLOR`, `CI` (unless empty or `0`) and `TERM=dumb` each switch to the plain output, even in a
-terminal.
+`NO_COLOR`, `NODE_DISABLE_COLORS` (unless `0`), `CI` (unless empty or `0`) and `TERM=dumb`
+each switch to plain output, even in a terminal.
 
 ## In your app
 
 Locale files keep the markers in the text, so resolve each string before showing it. The runtime
-helper falls back to English for anything missing, marked or with mismatched placeholders:
+helper renders a `? ` translation without the marker if its placeholders match English. It falls
+back to English for missing values, `! ` scaffolds or placeholder mismatches.
 
 ```ts
 import { parseSourceValue, parseTargetValue, resolveTargetValue } from '@shulha/lexmit/runtime'
@@ -170,8 +175,8 @@ Both return the tag unchanged when the platform has no name for it.
 
 ## In CI
 
-Check every push with full history. lexmit also finds the baseline in that history, so in a
-shallow clone it stops rather than pick the wrong commit:
+Use these steps in your CI job. Fetch full history so lexmit can find the baseline and replay
+changes from it.
 
 ```yaml
 - uses: actions/checkout@v7
@@ -186,11 +191,12 @@ shallow clone it stops rather than pick the wrong commit:
 
 ## The translation status bot
 
-Call the reusable workflow from your repository, at the tag of the version you installed. It
-runs the exact `@shulha/lexmit` version your `package.json` pins, so the bot and your local
-commands always agree. A version range is refused. Because the version comes from
-`package.json`, the tag only has to change when the [changelog](CHANGELOG.md) lists a change to
-the workflow.
+Call the reusable workflow from your repository. The workflow tag selects the workflow itself.
+The workflow installs the exact `@shulha/lexmit` version pinned as `x.y.z` in `dependencies` or
+`devDependencies` in your `package.json`.
+
+When upgrading the reusable workflow from `v0.1.0` to `v0.2.0`, remove its `lexmit-version` input
+and pin `@shulha/lexmit` in `package.json`.
 
 ```yaml
 name: Translation status
@@ -211,8 +217,10 @@ jobs:
 ```
 
 If the `package.json` that pins lexmit is not at the repository root, pass its path as
-`package-json`. If your branch rules stop the workflow token from pushing, add a deploy key with
-write access as a secret and pass it as `push-key`.
+`package-json`. For a branch other than `main`, update the push trigger and pass the branch
+name as `branch`. The example's push paths assume `localeDir` is `locales`.
+If your branch rules stop the workflow token from pushing, you can pass a write-enabled deploy
+key as the `push-key` secret if your branch rules allow that key to push.
 
 ## How it works
 

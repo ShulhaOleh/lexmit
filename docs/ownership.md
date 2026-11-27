@@ -14,10 +14,9 @@ history, not read off whichever marker the file currently holds.
 | Review   | A target exists, but acceptance for current English is not proven | `? <translation>`, or still unmarked before the bot runs |
 | Missing  | There is no usable target                                         | absent, or `! <English>`                                 |
 
-A translation whose English changed is in Review the moment the English commit lands, whether or
-not its `? ` has been written yet. The English source file is the only file a product change has
-to touch, so a marker is always written later, by the bot, in a separate commit. Code that reads
-state from the stored marker would call that entry Accepted and would be wrong.
+When an English edit leaves an existing translation without acceptance for the new wording, the
+translation is in Review as soon as the English commit lands. Developers can edit English on its
+own and let the bot write the `? ` marker in a later commit.
 `summarizeHistory` in `src/history.mts` exposes this as `effectiveState`, and it is the one
 interpretation the validators, the synchronizer, the review command and the CLI summaries all
 read.
@@ -52,22 +51,21 @@ unchanged translation, and for a scaffold quoting superseded English. They fail 
 whose `{placeholders}` disagree with English that has not changed, an unknown key holding real
 translated text, invalid marker syntax, empty values, and unsafe Unicode.
 
-When Git history is unavailable, a check that needs it reports what it could not determine and
-exits non-zero. It never assumes the tree is fine. `lexmit fill` deliberately needs no history
-and stays usable in a shallow clone; it writes English scaffolds and never decides acceptance.
+`lexmit verify` fails when it cannot replay the required history. `lexmit check` can still pass
+with an “Effective state unverified” message if the file checks pass and there are no findings
+that require history to resolve. `lexmit fill` works in a shallow clone because it only updates
+English scaffolds and locale structure.
 
 ## Acceptance has to exist in Git
 
-`lexmit review` lists every entry that is effectively Review, including those whose `?` the
-bot has not written yet, and it refuses any decision that would leave no trace. Keeping a
-translation writes back the text that is already there, so it is only a real acceptance when the
-committed file holds the `?` marker that the write removes. An Edit that retypes the committed
-text is refused for the same reason.
+`lexmit review` lists entries that are effectively Review, including those whose `?` the bot has
+yet to write. Keep and Edit compare the proposed unmarked value with the committed value.
+Either action needs a change that Git can record, such as removing a committed `? ` marker or
+changing the translated text.
 
-Both checks compare against the committed tree, never the working tree: a marker that sync wrote
-but nobody committed produces an empty diff, so removing it would record nothing while the
-command reported a successful Keep. When Keep is unavailable, run `lexmit sync`, commit the
-marker, and review again — or Edit, which writes new text and needs no marker first.
+If the translation text is unchanged, removing an uncommitted marker leaves an empty diff.
+To keep that translation, run `lexmit sync`, commit the marker, then review it again. To use new
+text, choose Edit and commit the result.
 
 A Review whose placeholders no longer match English can still be reviewed. Only Keep is
 unavailable there, because keeping text the runtime already replaces with English would accept a
@@ -75,9 +73,9 @@ translation nobody can see.
 
 ## Why history replay tolerates stale scaffolds
 
-Between an English commit and the bot's next run, every intermediate revision holds scaffolds
-quoting superseded English. History replay walks every revision from the baseline, so
-rejecting that drift would let a single ordinary commit break every later analysis permanently.
+Between an English commit and the bot's next run, locale files may still contain scaffolds that
+quote superseded English. History replay follows first-parent revisions that touch the locale
+directory, so it has to tolerate that drift in earlier commits.
 `analyzeCommittedHistory` therefore does not check scaffold freshness. Malformed markers,
 a `? ` marker without accepted lineage, and a missing or non-ancestor baseline still fail closed.
 The baseline is the commit that added `lexmit.config.json`, unless `historyBaseline` names
@@ -107,27 +105,26 @@ committed plain text records no decision. An explicit review marker must be comm
 Keep can remove it.
 
 `lexmit check <locale>` applies the same semantic rules as the default check to English and
-the selected locale. Unrelated corrupt locales do not block it. `lexmit status` remains
-structural and Git-independent. Its counts describe stored markers, not proven acceptance.
+the selected locale. Unrelated corrupt locales do not block it. `lexmit status` counts stored
+markers without replaying history. It looks up the baseline separately and still prints coverage
+if the lookup fails.
 
 ## What the writer checks before it commits
 
-A push made with `GITHUB_TOKEN` starts no workflow run, so the bot's commit may get no CI. A
-push made with `push-key` does start one, but only after the commit is on the branch. Everything
-the commit is checked against therefore happens inside the reusable
-`.github/workflows/translation-status.yml`, before the push:
+A push made with `GITHUB_TOKEN` does not trigger push workflows. A push made with `push-key` can
+trigger workflows whose filters match. The reusable `.github/workflows/translation-status.yml`
+runs its own checks before the push. See [GitHub's workflow trigger rules](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow).
 
 1. the source commit is valid on its own, before anything is written
 2. synchronize markers, regenerate contributors, README and SVGs
 3. strict marker and presentation freshness against the regenerated tree
-4. a second generation pass produces no further change
+4. rerun marker synchronization and presentation generation, then compare the results
 5. `lexmit guard` proves only allowed paths changed and no translated text was
    created, rewritten or deleted
 6. stage the owned paths by name, commit, and push without force
 
-If the branch advanced while the run was working, the push is rejected, the generated work is
-thrown away in the disposable runner, and the run recomputes from a fresh checkout, bounded to
-three attempts. A translator's commit is never overwritten and history is never force-pushed.
+After a rejected push, the bot fetches the branch again and regenerates its changes. It makes up
+to three attempts and uses normal pushes throughout.
 
 ## Runtime is unaffected
 
