@@ -4,11 +4,11 @@ Translation status for JSON locale files, reconstructed from Git history.
 
 lexmit uses your commits to track each English key in each target language.
 
-| State    | Meaning                                               | How it is stored                 |
-| -------- | ----------------------------------------------------- | -------------------------------- |
-| Accepted | Translated, and accepted for the current English      | the translation                 |
-| Review   | A translation exists and needs review                 | `? ` before the translation after sync |
-| Missing  | Not translated yet                                    | absent, or `! ` and the English |
+| State    | Meaning                                          | How it is stored                       |
+| -------- | ------------------------------------------------ | -------------------------------------- |
+| Accepted | Translated, and accepted for the current English | the translation                        |
+| Review   | A translation exists and needs review            | `? ` before the translation after sync |
+| Missing  | Not translated yet                               | absent, or `! ` and the English        |
 
 Developers can change English without editing the other locale files. A bot writes the `!` and
 `?` markers, the translator credits, a status table in your README and one status image per
@@ -72,15 +72,15 @@ and uses forward slashes.
 }
 ```
 
-| Field              | What it is                                               |
-| ------------------ | -------------------------------------------------------- |
+| Field              | What it is                                                 |
+| ------------------ | ---------------------------------------------------------- |
 | `historyBaseline`  | Optional. Full 40-character commit ID to start replay from |
-| `localeDir`        | The folder holding `en.json` and the other languages     |
-| `readme`           | The file that gets the status table                      |
-| `statusAssetDir`   | Where the per-language status images are written         |
-| `contributorsFile` | Where translator credits are stored, outside `localeDir` |
-| `translationGuide` | The guide the status table links translators to          |
-| `maintainers`      | Optional GitHub logins treated like repository admins    |
+| `localeDir`        | The folder holding `en.json` and the other languages       |
+| `readme`           | The file that gets the status table                        |
+| `statusAssetDir`   | Where the per-language status images are written           |
+| `contributorsFile` | Where translator credits are stored, outside `localeDir`   |
+| `translationGuide` | The guide the status table links translators to            |
+| `maintainers`      | Optional GitHub logins treated like repository admins      |
 
 History replay starts at a baseline commit, where each valid, unmarked translation counts as
 Accepted. Without `historyBaseline`, lexmit finds the most recent commit on the branch's
@@ -117,21 +117,21 @@ the configured `contributorsFile` with `{}`.
 
 ## Commands
 
-| Command                       | What it does                                           |
-| ----------------------------- | ------------------------------------------------------ |
-| `lexmit help`                 | Show the translator workflow                           |
-| `lexmit status`               | Coverage for every language, from the stored markers   |
-| `lexmit check [locale]`       | Validate all locales, or English and the named locale  |
-| `lexmit missing <locale>`     | List missing keys with their English text              |
-| `lexmit create <locale>`      | Start a new language filled with marked English        |
-| `lexmit fill <locale>`        | Add, refresh or remove `! ` scaffolds for one locale  |
-| `lexmit translate <locale>`   | Translate a language interactively                     |
+| Command                       | What it does                                            |
+| ----------------------------- | ------------------------------------------------------- |
+| `lexmit help`                 | Show the translator workflow                            |
+| `lexmit status`               | Coverage for every language, from the stored markers    |
+| `lexmit check [locale]`       | Validate all locales, or English and the named locale   |
+| `lexmit missing <locale>`     | List missing keys with their English text               |
+| `lexmit create <locale>`      | Start a new language filled with marked English         |
+| `lexmit fill <locale>`        | Add, refresh or remove `! ` scaffolds for one locale    |
+| `lexmit translate <locale>`   | Translate a language interactively                      |
 | `lexmit review <locale>`      | Keep or edit translations that need review              |
 | `lexmit sync`                 | Reconcile markers and locale structure across languages |
-| `lexmit verify`               | Check translation data against Git history, for CI     |
-| `lexmit verify --staged`      | The same check for staged files, for a pre-commit hook |
-| `lexmit presentation --check` | Check that the README table and images are current     |
-| `lexmit presentation --write` | Write the README table and images                      |
+| `lexmit verify`               | Check translation data against Git history, for CI      |
+| `lexmit verify --staged`      | The same check for staged files, for a pre-commit hook  |
+| `lexmit presentation --check` | Check that the README table and images are current      |
+| `lexmit presentation --write` | Write the README table and images                       |
 
 ## Terminal output
 
