@@ -2,6 +2,22 @@
     "name": "@shulha/lexmit",
     "version": "0.2.0",
     "description": "Translation status for JSON locale files, reconstructed from Git history",
+    "keywords": [
+        "i18n",
+        "l10n",
+        "internationalization",
+        "localization",
+        "translation",
+        "translations",
+        "locale",
+        "json",
+        "git",
+        "missing-translations",
+        "translation-status",
+        "ci",
+        "cli",
+        "bun"
+    ],
     "license": "MIT",
     "author": "Oleh Shulha",
     "repository": {
